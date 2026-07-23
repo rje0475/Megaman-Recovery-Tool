@@ -1,5 +1,6 @@
 import re
 import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from database import voeg_mp3_toe
@@ -10,6 +11,7 @@ from database import zet_nul_bytes
 FFMPEG = r"C:\ffmpeg\ffmpeg.exe"
 
 AANTAL_THREADS = 2
+BREEDTE_VOORTGANGSBALK = 30
 
 
 def zoek_mp3_bestanden(map_pad):
@@ -129,6 +131,23 @@ def controleer_bestand(bestand, basis_map):
     return relatief_pad, "OK", None, None
 
 
+def toon_voortgang(verwerkt, totaal, goed, ffmpeg_fouten, nul_bytes):
+    """
+    Toon de actuele scanstatus op één consoleregel.
+    """
+
+    percentage = 100 if totaal == 0 else int(verwerkt / totaal * 100)
+    gevuld = int(BREEDTE_VOORTGANGSBALK * percentage / 100)
+    balk = "#" * gevuld + "-" * (BREEDTE_VOORTGANGSBALK - gevuld)
+
+    sys.stdout.write(
+        f"\r[{balk}] {percentage:3d}% "
+        f"{verwerkt}/{totaal} | OK: {goed} | "
+        f"FFmpeg-fouten: {ffmpeg_fouten} | 0-byte: {nul_bytes}"
+    )
+    sys.stdout.flush()
+
+
 def controleer_mp3_bestanden(mp3_bestanden, basis_map, database):
     """
     Controleer alle MP3-bestanden parallel.
@@ -136,12 +155,15 @@ def controleer_mp3_bestanden(mp3_bestanden, basis_map, database):
 
     goed = 0
     nul_bytes = []
+    ffmpeg_fouten = 0
 
     for bestand in mp3_bestanden:
         voeg_mp3_toe(database, basis_map, bestand)
 
     totaal = len(mp3_bestanden)
     verwerkt = 0
+
+    toon_voortgang(verwerkt, totaal, goed, ffmpeg_fouten, len(nul_bytes))
 
     with ThreadPoolExecutor(max_workers=AANTAL_THREADS) as executor:
 
@@ -152,11 +174,7 @@ def controleer_mp3_bestanden(mp3_bestanden, basis_map, database):
 
         for future in as_completed(futures):
 
-            verwerkt += 1
-
             bestand = futures[future]
-
-            print(f"[{verwerkt}/{totaal}] {bestand.name}")
 
             relatief_pad, status, fouttype, melding = future.result()
 
@@ -174,6 +192,7 @@ def controleer_mp3_bestanden(mp3_bestanden, basis_map, database):
                     fouttype,
                     melding
                 )
+                ffmpeg_fouten += 1
 
             else:
 
@@ -186,5 +205,16 @@ def controleer_mp3_bestanden(mp3_bestanden, basis_map, database):
                 )
 
                 goed += 1
+
+            verwerkt += 1
+            toon_voortgang(
+                verwerkt,
+                totaal,
+                goed,
+                ffmpeg_fouten,
+                len(nul_bytes)
+            )
+
+    sys.stdout.write("\n")
 
     return goed, nul_bytes
