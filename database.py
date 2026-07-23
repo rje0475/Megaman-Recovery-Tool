@@ -226,6 +226,33 @@ class SQLiteDatabase:
             ON recovery_provider_resultaten (provider, resultaat_type)
             """
         )
+        self.verbinding.execute(
+            """
+            CREATE TABLE IF NOT EXISTS par_inventory (
+                id INTEGER PRIMARY KEY,
+                par_set_key TEXT NOT NULL UNIQUE,
+                gekoppelde_rar_set_key TEXT,
+                par_startbestand TEXT,
+                aantal_par_bestanden INTEGER NOT NULL DEFAULT 0,
+                aantal_recovery_volumes INTEGER NOT NULL DEFAULT 0,
+                recovery_blocks_beschikbaar INTEGER,
+                recovery_blocks_benodigd INTEGER,
+                status TEXT NOT NULL,
+                verificatie_tool TEXT,
+                verificatie_melding TEXT,
+                bijgewerkt_op TEXT NOT NULL,
+                FOREIGN KEY (gekoppelde_rar_set_key)
+                    REFERENCES rar_sets (rar_set_key)
+                    ON DELETE SET NULL
+            )
+            """
+        )
+        self.verbinding.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_par_inventory_rar_set
+            ON par_inventory (gekoppelde_rar_set_key)
+            """
+        )
         kolommen = {
             rij["name"]
             for rij in self.verbinding.execute(
