@@ -18,6 +18,7 @@ BANNER = (
 def maak_parser():
     parser = argparse.ArgumentParser(
         prog="python main.py",
+        allow_abbrev=False,
         description=(
             "Analyseer MP3-, RAR- en PAR2-bestanden zonder bestanden te "
             "repareren, uit te pakken, te verplaatsen of te verwijderen."

@@ -123,7 +123,7 @@ en skips worden opgeslagen in de SQLite-tabel `extraction_results`.
 # PAR2-reparatie
 
 Na een analyse kunnen uitsluitend als `REPAIRABLE` aangemerkte PAR2-datasets
-expliciet worden gerepareerd:
+expliciet worden gerepareerd met de officiële CLI-optie `--repair "<map>"`:
 
 ```powershell
 python main.py --repair "C:\pad\naar\downloadmap"

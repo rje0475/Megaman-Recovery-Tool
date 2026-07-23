@@ -116,6 +116,69 @@ class CliTest(unittest.TestCase):
             Path(r"C:\demo\download"), uitvoer=unittest.mock.ANY
         )
 
+    def test_repair_accepteert_exact_een_mapargument(self):
+        overzicht = Mock(mislukt=0)
+        with patch(
+            "par2_repair.voer_par2_reparatie_uit",
+            return_value=overzicht,
+        ) as reparatie:
+            code = cli.main(
+                ["--repair", "alleen-deze-map"],
+                uitvoer=io.StringIO(),
+            )
+        self.assertEqual(code, 0)
+        reparatie.assert_called_once_with(
+            Path("alleen-deze-map"), uitvoer=unittest.mock.ANY
+        )
+
+        fouten = io.StringIO()
+        with contextlib.redirect_stderr(fouten):
+            with self.assertRaises(SystemExit) as afsluiting:
+                cli.main(
+                    ["--repair", "map-een", "map-twee"],
+                    uitvoer=io.StringIO(),
+                )
+        self.assertEqual(afsluiting.exception.code, 2)
+        self.assertIn("unrecognized arguments: map-twee", fouten.getvalue())
+
+    def test_repair_zonder_mapargument_geeft_argparse_fout(self):
+        fouten = io.StringIO()
+        with contextlib.redirect_stderr(fouten):
+            with self.assertRaises(SystemExit) as afsluiting:
+                cli.main(["--repair"], uitvoer=io.StringIO())
+        self.assertEqual(afsluiting.exception.code, 2)
+        self.assertIn(
+            "argument --repair: expected one argument",
+            fouten.getvalue(),
+        )
+
+    def test_repair_met_niet_bestaande_map_geeft_geen_traceback(self):
+        uitvoer = io.StringIO()
+        code = cli.main(
+            ["--repair", r"Z:\bestaat\beslist\niet"],
+            uitvoer=uitvoer,
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("PAR2-map bestaat niet", uitvoer.getvalue())
+        self.assertNotIn("Traceback", uitvoer.getvalue())
+
+    def test_repair_workflow_is_geen_publieke_optie(self):
+        helptekst = cli.maak_parser().format_help()
+        self.assertNotIn("--repair-workflow", helptekst)
+
+        fouten = io.StringIO()
+        with contextlib.redirect_stderr(fouten):
+            with self.assertRaises(SystemExit) as afsluiting:
+                cli.main(
+                    ["--repair-workflow", "map"],
+                    uitvoer=io.StringIO(),
+                )
+        self.assertEqual(afsluiting.exception.code, 2)
+        self.assertIn(
+            "unrecognized arguments: --repair-workflow map",
+            fouten.getvalue(),
+        )
+
     def test_ontbrekende_repair_tool_crasht_cli_niet(self):
         with patch(
             "par2_repair.voer_par2_reparatie_uit",
