@@ -1,7 +1,7 @@
 import subprocess
-from pathlib import PureWindowsPath
 
 from database import zet_rar_status
+from paden import normaliseer_relatief_pad
 
 # Pad naar 7-Zip
 ZEVEN_ZIP = r"C:\Program Files\7-Zip\7z.exe"
@@ -20,13 +20,7 @@ def normaliseer_pad(bestandnaam):
     Zet een pad uit de RAR om naar hetzelfde formaat als de database.
     """
 
-    delen = PureWindowsPath(bestandnaam).parts
-
-    # Verwijder eventueel jaartal (2006, 2007, 2008, ...)
-    if delen and delen[0].isdigit():
-        delen = delen[1:]
-
-    return str(PureWindowsPath(*delen))
+    return normaliseer_relatief_pad(bestandnaam)
 
 
 def decodeer_7zip_uitvoer(data):

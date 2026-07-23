@@ -1,6 +1,9 @@
 from pathlib import Path
 from datetime import datetime
 
+from database import verkrijg_ontbrekende_rar_items
+from database import verkrijg_rar_inventory_overzicht
+
 
 def maak_rapport(map_pad, database):
 
@@ -17,6 +20,8 @@ def maak_rapport(map_pad, database):
     nul_bytes = []
     rar_fouten = []
     ffmpeg_fouten = []
+    rar_overzicht = verkrijg_rar_inventory_overzicht(database)
+    ontbrekende_rar_items = verkrijg_ontbrekende_rar_items(database)
 
     for gegevens in database.values():
 
@@ -49,6 +54,47 @@ def maak_rapport(map_pad, database):
         f.write(f"0-byte       : {len(nul_bytes)}\n")
         f.write(f"RAR fouten   : {len(rar_fouten)}\n")
         f.write(f"FFmpeg fouten: {len(ffmpeg_fouten)}\n\n")
+
+        f.write("RAR-inventaris\n")
+        f.write("------------------------------\n")
+        f.write(f"RAR-sets                 : {rar_overzicht['rar_sets']}\n")
+        f.write(
+            f"Verwachte MP3's          : "
+            f"{rar_overzicht['verwachte_mp3s']}\n"
+        )
+        f.write(
+            f"Aangetroffen MP3's       : "
+            f"{rar_overzicht['aangetroffen_mp3s']}\n"
+        )
+        f.write(
+            f"Ontbrekende MP3's        : "
+            f"{rar_overzicht['ontbrekende_mp3s']}\n"
+        )
+        f.write(
+            f"Afwijkende grootte       : "
+            f"{rar_overzicht['grootte_afwijkend']}\n"
+        )
+        f.write(
+            f"Onvolledige RAR-listings : "
+            f"{rar_overzicht['listing_fouten']}\n\n"
+        )
+
+        if ontbrekende_rar_items:
+
+            f.write("Ontbrekende MP3's uit RAR-inventaris\n")
+            f.write("------------------------------\n")
+
+            for item in ontbrekende_rar_items:
+                grootte = (
+                    item["verwachte_grootte"]
+                    if item["verwachte_grootte"] is not None
+                    else "onbekend"
+                )
+                crc = item["verwachte_crc32"] or "onbekend"
+                f.write(f"RAR-set : {item['rar_set_key']}\n")
+                f.write(f"Pad     : {item['verwacht_rel_pad']}\n")
+                f.write(f"Grootte : {grootte}\n")
+                f.write(f"CRC     : {crc}\n\n")
 
         if nul_bytes:
 

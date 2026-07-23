@@ -1,5 +1,8 @@
 import sqlite3
+from datetime import datetime
 from pathlib import Path
+
+from paden import normaliseer_relatief_pad_sleutel
 
 
 DATABASE_BESTAND = Path("megaman_recovery.db")
@@ -52,6 +55,45 @@ class SQLiteDatabase:
                 FOREIGN KEY (relatief_pad)
                     REFERENCES mp3_bestanden (relatief_pad)
                     ON DELETE CASCADE
+            )
+            """
+        )
+        self.verbinding.execute(
+            """
+            CREATE TABLE IF NOT EXISTS rar_sets (
+                rar_set_key TEXT PRIMARY KEY,
+                rar_startbestand TEXT NOT NULL,
+                listing_volledig INTEGER NOT NULL,
+                listing_fout TEXT,
+                inventaris_bron TEXT NOT NULL,
+                actief INTEGER NOT NULL,
+                bijgewerkt_op TEXT NOT NULL
+            )
+            """
+        )
+        self.verbinding.execute(
+            """
+            CREATE TABLE IF NOT EXISTS rar_inventory_items (
+                id INTEGER PRIMARY KEY,
+                rar_set_key TEXT NOT NULL,
+                rar_startbestand TEXT NOT NULL,
+                verwacht_rel_pad TEXT NOT NULL,
+                verwacht_rel_pad_norm TEXT NOT NULL,
+                verwachte_map TEXT NOT NULL,
+                verwachte_bestandsnaam TEXT NOT NULL,
+                verwachte_grootte INTEGER,
+                verwachte_crc32 TEXT,
+                verwachte_modified TEXT,
+                inventaris_bron TEXT NOT NULL,
+                listing_fout TEXT,
+                aangetroffen_rel_pad TEXT,
+                ontbreekt INTEGER NOT NULL DEFAULT 1,
+                grootte_afwijkend INTEGER NOT NULL DEFAULT 0,
+                gekoppeld_op TEXT,
+                FOREIGN KEY (rar_set_key)
+                    REFERENCES rar_sets (rar_set_key)
+                    ON DELETE CASCADE,
+                UNIQUE (rar_set_key, verwacht_rel_pad_norm)
             )
             """
         )
@@ -366,3 +408,294 @@ def verkrijg_provider_resultaat(database, relatief_pad, provider):
         "duur_ms": rij["duur_ms"],
         "zoekmethode": rij["zoekmethode"]
     }
+
+
+def begin_rar_inventory_scan(database):
+    """
+    Markeer bestaande RAR-sets als inactief voor een nieuwe inventarisrun.
+    """
+
+    database.verbinding.execute(
+        "UPDATE rar_sets SET actief = ?",
+        (False,)
+    )
+    database.verbinding.commit()
+
+
+def bewaar_rar_set(
+    database,
+    rar_set_key,
+    rar_startbestand,
+    listing_volledig,
+    listing_fout=None,
+    inventaris_bron="7zip-slt"
+):
+    """
+    Bewaar de uitkomst van één RAR-listing.
+    """
+
+    database.verbinding.execute(
+        """
+        INSERT INTO rar_sets (
+            rar_set_key,
+            rar_startbestand,
+            listing_volledig,
+            listing_fout,
+            inventaris_bron,
+            actief,
+            bijgewerkt_op
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (rar_set_key) DO UPDATE SET
+            rar_startbestand = excluded.rar_startbestand,
+            listing_volledig = excluded.listing_volledig,
+            listing_fout = excluded.listing_fout,
+            inventaris_bron = excluded.inventaris_bron,
+            actief = excluded.actief,
+            bijgewerkt_op = excluded.bijgewerkt_op
+        """,
+        (
+            rar_set_key,
+            str(rar_startbestand),
+            listing_volledig,
+            listing_fout,
+            inventaris_bron,
+            True,
+            datetime.now().isoformat(timespec="seconds")
+        )
+    )
+    database.verbinding.commit()
+
+
+def vervang_rar_inventory_items(
+    database,
+    rar_set_key,
+    rar_startbestand,
+    items,
+    listing_fout=None,
+    inventaris_bron="7zip-slt"
+):
+    """
+    Upsert de actuele MP3-inventaris en verwijder verouderde setitems.
+    """
+
+    actuele_sleutels = set()
+
+    for item in items:
+        sleutel = item["verwacht_rel_pad_norm"]
+        actuele_sleutels.add(sleutel)
+        database.verbinding.execute(
+            """
+            INSERT INTO rar_inventory_items (
+                rar_set_key,
+                rar_startbestand,
+                verwacht_rel_pad,
+                verwacht_rel_pad_norm,
+                verwachte_map,
+                verwachte_bestandsnaam,
+                verwachte_grootte,
+                verwachte_crc32,
+                verwachte_modified,
+                inventaris_bron,
+                listing_fout,
+                aangetroffen_rel_pad,
+                ontbreekt,
+                grootte_afwijkend,
+                gekoppeld_op
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 1, 0, NULL)
+            ON CONFLICT (rar_set_key, verwacht_rel_pad_norm) DO UPDATE SET
+                rar_startbestand = excluded.rar_startbestand,
+                verwacht_rel_pad = excluded.verwacht_rel_pad,
+                verwachte_map = excluded.verwachte_map,
+                verwachte_bestandsnaam = excluded.verwachte_bestandsnaam,
+                verwachte_grootte = excluded.verwachte_grootte,
+                verwachte_crc32 = excluded.verwachte_crc32,
+                verwachte_modified = excluded.verwachte_modified,
+                inventaris_bron = excluded.inventaris_bron,
+                listing_fout = excluded.listing_fout,
+                aangetroffen_rel_pad = NULL,
+                ontbreekt = 1,
+                grootte_afwijkend = 0,
+                gekoppeld_op = NULL
+            """,
+            (
+                rar_set_key,
+                str(rar_startbestand),
+                item["verwacht_rel_pad"],
+                sleutel,
+                item["verwachte_map"],
+                item["verwachte_bestandsnaam"],
+                item.get("verwachte_grootte"),
+                item.get("verwachte_crc32"),
+                item.get("verwachte_modified"),
+                inventaris_bron,
+                listing_fout
+            )
+        )
+
+    bestaande_sleutels = {
+        rij["verwacht_rel_pad_norm"]
+        for rij in database.verbinding.execute(
+            """
+            SELECT verwacht_rel_pad_norm
+            FROM rar_inventory_items
+            WHERE rar_set_key = ?
+            """,
+            (rar_set_key,)
+        )
+    }
+
+    for verouderde_sleutel in bestaande_sleutels - actuele_sleutels:
+        database.verbinding.execute(
+            """
+            DELETE FROM rar_inventory_items
+            WHERE rar_set_key = ? AND verwacht_rel_pad_norm = ?
+            """,
+            (rar_set_key, verouderde_sleutel)
+        )
+
+    database.verbinding.commit()
+
+
+def eindig_rar_inventory_scan(database):
+    """
+    Verwijder sets die niet in de huidige RAR-map voorkwamen.
+    """
+
+    database.verbinding.execute(
+        "DELETE FROM rar_sets WHERE actief = ?",
+        (False,)
+    )
+    database.verbinding.commit()
+
+
+def vergelijk_rar_inventory(database):
+    """
+    Koppel verwachte RAR-items aan actieve, werkelijk aanwezige MP3's.
+    """
+
+    aangetroffen = {}
+
+    for gegevens in database.values():
+        relatief_pad = gegevens["relatief_pad"]
+        sleutel = normaliseer_relatief_pad_sleutel(relatief_pad)
+        bestand = Path(gegevens["bestand"])
+
+        try:
+            grootte = bestand.stat().st_size
+        except OSError:
+            continue
+
+        aangetroffen[sleutel] = {
+            "relatief_pad": relatief_pad,
+            "grootte": grootte
+        }
+
+    items = database.verbinding.execute(
+        """
+        SELECT inventaris.id, inventaris.verwacht_rel_pad_norm,
+               inventaris.verwachte_grootte
+        FROM rar_inventory_items AS inventaris
+        JOIN rar_sets AS sets
+          ON sets.rar_set_key = inventaris.rar_set_key
+        WHERE sets.actief = ?
+        """,
+        (True,)
+    ).fetchall()
+    gekoppeld_op = datetime.now().isoformat(timespec="seconds")
+
+    for item in items:
+        werkelijk = aangetroffen.get(item["verwacht_rel_pad_norm"])
+
+        if werkelijk is None:
+            database.verbinding.execute(
+                """
+                UPDATE rar_inventory_items
+                SET aangetroffen_rel_pad = NULL,
+                    ontbreekt = 1,
+                    grootte_afwijkend = 0,
+                    gekoppeld_op = NULL
+                WHERE id = ?
+                """,
+                (item["id"],)
+            )
+            continue
+
+        verwachte_grootte = item["verwachte_grootte"]
+        grootte_afwijkend = (
+            verwachte_grootte is not None
+            and werkelijk["grootte"] != verwachte_grootte
+        )
+        database.verbinding.execute(
+            """
+            UPDATE rar_inventory_items
+            SET aangetroffen_rel_pad = ?,
+                ontbreekt = 0,
+                grootte_afwijkend = ?,
+                gekoppeld_op = ?
+            WHERE id = ?
+            """,
+            (
+                werkelijk["relatief_pad"],
+                grootte_afwijkend,
+                gekoppeld_op,
+                item["id"]
+            )
+        )
+
+    database.verbinding.commit()
+
+
+def verkrijg_rar_inventory_overzicht(database):
+    """
+    Geef de actuele inventaristellingen terug.
+    """
+
+    rij = database.verbinding.execute(
+        """
+        SELECT
+            (SELECT COUNT(*) FROM rar_sets WHERE actief = 1)
+                AS rar_sets,
+            COUNT(inventaris.id) AS verwachte_mp3s,
+            COALESCE(SUM(CASE WHEN inventaris.ontbreekt = 0
+                              THEN 1 ELSE 0 END), 0)
+                AS aangetroffen_mp3s,
+            COALESCE(SUM(CASE WHEN inventaris.ontbreekt = 1
+                              THEN 1 ELSE 0 END), 0)
+                AS ontbrekende_mp3s,
+            COALESCE(SUM(CASE WHEN inventaris.grootte_afwijkend = 1
+                              THEN 1 ELSE 0 END), 0)
+                AS grootte_afwijkend,
+            (SELECT COUNT(*) FROM rar_sets
+             WHERE actief = 1 AND listing_volledig = 0)
+                AS listing_fouten
+        FROM rar_inventory_items AS inventaris
+        JOIN rar_sets AS sets
+          ON sets.rar_set_key = inventaris.rar_set_key
+        WHERE sets.actief = 1
+        """
+    ).fetchone()
+    return dict(rij)
+
+
+def verkrijg_ontbrekende_rar_items(database):
+    """
+    Geef alle volledig ontbrekende MP3-items uit de actuele inventaris.
+    """
+
+    rijen = database.verbinding.execute(
+        """
+        SELECT inventaris.rar_set_key,
+               inventaris.verwacht_rel_pad,
+               inventaris.verwachte_grootte,
+               inventaris.verwachte_crc32
+        FROM rar_inventory_items AS inventaris
+        JOIN rar_sets AS sets
+          ON sets.rar_set_key = inventaris.rar_set_key
+        WHERE sets.actief = 1 AND inventaris.ontbreekt = 1
+        ORDER BY inventaris.rar_set_key,
+                 inventaris.verwacht_rel_pad_norm
+        """
+    ).fetchall()
+    return [dict(rij) for rij in rijen]
