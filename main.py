@@ -6,6 +6,7 @@ from rar import zoek_part01_bestanden
 from rar import test_rar
 from scanner import controleer_mp3_bestanden
 from scanner import zoek_mp3_bestanden
+from spotify import voer_spotify_scan_uit
 
 
 print("===================================")
@@ -59,6 +60,14 @@ controleer_mp3_bestanden(
     mp3_map,
     database
 )
+
+# --------------------------------------------------
+# Spotify-verrijking
+# --------------------------------------------------
+
+print("\nSpotify-verrijking...")
+
+voer_spotify_scan_uit(database)
 
 # --------------------------------------------------
 # RAR scan

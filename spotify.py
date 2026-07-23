@@ -2,13 +2,16 @@ import base64
 import json
 import os
 import re
+import sys
 import time
 from dataclasses import dataclass, replace
+from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from database import bewaar_provider_resultaat
+from database import verkrijg_provider_resultaat
 
 
 SPOTIFY_PROVIDER = "spotify"
@@ -86,6 +89,21 @@ class MuziekResultaat:
     zoekmethode: str | None = None
 
 
+@dataclass(frozen=True)
+class SpotifyScanResultaat:
+    """
+    Tellingen van één Spotify-verrijkingsstap.
+    """
+
+    totaal: int
+    verwerkt: int
+    gevonden: int
+    niet_gevonden: int
+    fouten: int
+    overgeslagen: int
+    credentials_ontbreken: bool = False
+
+
 def schoon_mp3_bestandsnaam(bestandsnaam):
     """
     Maak een MP3-bestandsnaam geschikt voor een Spotify-zoekopdracht.
@@ -158,8 +176,7 @@ class SpotifyClient:
 
         return cls(
             os.environ.get("SPOTIFY_CLIENT_ID"),
-            os.environ.get("SPOTIFY_CLIENT_SECRET"),
-            market=os.environ.get("SPOTIFY_MARKET", "NL")
+            os.environ.get("SPOTIFY_CLIENT_SECRET")
         )
 
     def zoek_nummer(self, artiest, titel):
@@ -356,3 +373,152 @@ def zoek_en_bewaar_spotify_nummer(
     )
 
     return resultaat
+
+
+def voer_spotify_scan_uit(database, client=None, uitvoer=None):
+    """
+    Verrijk actieve, niet-lege MP3's en hervat eerdere Spotify-resultaten.
+    """
+
+    uitvoer = uitvoer or sys.stdout
+
+    if client is None:
+        try:
+            client = SpotifyClient.uit_omgeving()
+        except SpotifyConfiguratieFout:
+            uitvoer.write(
+                "Spotify overgeslagen: stel SPOTIFY_CLIENT_ID en "
+                "SPOTIFY_CLIENT_SECRET in.\n"
+            )
+            return SpotifyScanResultaat(
+                totaal=0,
+                verwerkt=0,
+                gevonden=0,
+                niet_gevonden=0,
+                fouten=0,
+                overgeslagen=0,
+                credentials_ontbreken=True
+            )
+
+    kandidaten = [
+        gegevens
+        for gegevens in database.values()
+        if gegevens["bestaat"] and not gegevens["nul_bytes"]
+    ]
+    resterend = [
+        gegevens
+        for gegevens in kandidaten
+        if verkrijg_provider_resultaat(
+            database,
+            gegevens["relatief_pad"],
+            SPOTIFY_PROVIDER
+        ) is None
+    ]
+
+    totaal = len(resterend)
+    overgeslagen = len(kandidaten) - totaal
+    verwerkt = 0
+    gevonden = 0
+    niet_gevonden = 0
+    fouten = 0
+
+    _toon_spotify_voortgang(
+        uitvoer,
+        verwerkt,
+        totaal,
+        gevonden,
+        niet_gevonden,
+        fouten
+    )
+
+    for gegevens in resterend:
+        artiest, titel = bepaal_spotify_zoekwaarden(gegevens)
+
+        try:
+            resultaat = zoek_en_bewaar_spotify_nummer(
+                database,
+                gegevens["relatief_pad"],
+                artiest,
+                titel,
+                client
+            )
+        except (SpotifyFout, ValueError):
+            fouten += 1
+        else:
+            if resultaat.gevonden:
+                gevonden += 1
+            else:
+                niet_gevonden += 1
+
+        verwerkt += 1
+        _toon_spotify_voortgang(
+            uitvoer,
+            verwerkt,
+            totaal,
+            gevonden,
+            niet_gevonden,
+            fouten
+        )
+
+    uitvoer.write("\n")
+
+    if overgeslagen:
+        uitvoer.write(
+            f"Spotify: {overgeslagen} eerder verwerkte "
+            "resultaten overgeslagen.\n"
+        )
+
+    return SpotifyScanResultaat(
+        totaal=totaal,
+        verwerkt=verwerkt,
+        gevonden=gevonden,
+        niet_gevonden=niet_gevonden,
+        fouten=fouten,
+        overgeslagen=overgeslagen
+    )
+
+
+def bepaal_spotify_zoekwaarden(gegevens):
+    """
+    Leid artiest en titel af uit het relatieve pad en de bestandsnaam.
+    """
+
+    relatief_pad = Path(gegevens["relatief_pad"])
+    delen = relatief_pad.parts
+    bestandsnaam = relatief_pad.name
+    naam_zonder_extensie = re.sub(
+        r"(?i)\.mp3$",
+        "",
+        bestandsnaam
+    )
+    naam_zonder_tracknummer = VOORLOOP_TRACKNUMMER.sub(
+        "",
+        naam_zonder_extensie
+    )
+
+    if " - " in naam_zonder_tracknummer:
+        artiest, titel = naam_zonder_tracknummer.split(" - ", 1)
+        return artiest.strip(), titel.strip()
+
+    if len(delen) > 1:
+        return delen[0].strip(), bestandsnaam
+
+    artiest = Path(gegevens["bestand"]).parent.name.strip()
+    return artiest or "Onbekend", bestandsnaam
+
+
+def _toon_spotify_voortgang(
+    uitvoer,
+    verwerkt,
+    totaal,
+    gevonden,
+    niet_gevonden,
+    fouten
+):
+    uitvoer.write(
+        f"\rSpotify: {verwerkt}/{totaal} | "
+        f"gevonden: {gevonden} | "
+        f"niet gevonden: {niet_gevonden} | "
+        f"fouten: {fouten}"
+    )
+    uitvoer.flush()
