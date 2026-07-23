@@ -147,6 +147,15 @@ class SQLiteDatabase:
                 spotify_verwerkt INTEGER NOT NULL DEFAULT 0,
                 download_verwerkt INTEGER NOT NULL DEFAULT 0,
                 geplaatst INTEGER NOT NULL DEFAULT 0,
+                bepaalde_artiest TEXT,
+                bepaalde_titel TEXT,
+                bepaald_album TEXT,
+                bepaald_tracknummer TEXT,
+                identiteit_bron TEXT,
+                identiteit_betrouwbaarheid REAL,
+                identiteit_bepaald_op TEXT,
+                identiteit_bron_handtekening TEXT,
+                identiteit_reden TEXT,
                 aangemaakt_op TEXT NOT NULL,
                 bijgewerkt_op TEXT NOT NULL,
                 FOREIGN KEY (mp3_id)
@@ -159,6 +168,30 @@ class SQLiteDatabase:
             )
             """
         )
+        recovery_kolommen = {
+            rij["name"]
+            for rij in self.verbinding.execute(
+                "PRAGMA table_info(recovery_items)"
+            )
+        }
+        recovery_migraties = {
+            "bepaalde_artiest": "TEXT",
+            "bepaalde_titel": "TEXT",
+            "bepaald_album": "TEXT",
+            "bepaald_tracknummer": "TEXT",
+            "identiteit_bron": "TEXT",
+            "identiteit_betrouwbaarheid": "REAL",
+            "identiteit_bepaald_op": "TEXT",
+            "identiteit_bron_handtekening": "TEXT",
+            "identiteit_reden": "TEXT",
+        }
+
+        for kolom, kolomtype in recovery_migraties.items():
+            if kolom not in recovery_kolommen:
+                self.verbinding.execute(
+                    f"ALTER TABLE recovery_items "
+                    f"ADD COLUMN {kolom} {kolomtype}"
+                )
         kolommen = {
             rij["name"]
             for rij in self.verbinding.execute(

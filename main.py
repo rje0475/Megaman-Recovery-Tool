@@ -6,6 +6,7 @@ from rar import zoek_part01_bestanden
 from rar import test_rar
 from rar_inventory import voer_rar_inventory_uit
 from recovery import genereer_recovery_items
+from identity import bepaal_recovery_identiteiten
 from scanner import controleer_mp3_bestanden
 from scanner import zoek_mp3_bestanden
 from spotify import voer_spotify_scan_uit
@@ -98,6 +99,7 @@ for rar in part01_bestanden:
 # --------------------------------------------------
 
 genereer_recovery_items(database)
+bepaal_recovery_identiteiten(database)
 
 # --------------------------------------------------
 # Tellingen
