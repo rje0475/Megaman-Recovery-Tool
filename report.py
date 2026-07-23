@@ -5,6 +5,7 @@ from database import verkrijg_ontbrekende_rar_items
 from database import verkrijg_rar_inventory_overzicht
 from database import verkrijg_recovery_items
 from database import verkrijg_recovery_overzicht
+from identity import verkrijg_identiteit_overzicht
 
 
 def maak_rapport(map_pad, database):
@@ -26,6 +27,7 @@ def maak_rapport(map_pad, database):
     ontbrekende_rar_items = verkrijg_ontbrekende_rar_items(database)
     recovery_overzicht = verkrijg_recovery_overzicht(database)
     recovery_items = verkrijg_recovery_items(database)
+    identiteit_overzicht = verkrijg_identiteit_overzicht(database)
 
     for gegevens in database.values():
 
@@ -120,6 +122,39 @@ def maak_rapport(map_pad, database):
             f.write(f"RAR-set      : {item['rar_set_key']}\n")
             f.write(f"Relatief pad : {item['verwacht_rel_pad']}\n")
             f.write(f"Probleemtype : {item['probleem_type']}\n\n")
+
+        f.write("Recovery-identiteit\n")
+        f.write("------------------------------\n")
+        f.write(
+            f"Artiest en titel : "
+            f"{identiteit_overzicht['artiest_en_titel']}\n"
+        )
+        f.write(
+            f"Alleen titel     : "
+            f"{identiteit_overzicht['alleen_titel']}\n"
+        )
+        f.write(
+            f"Zonder identiteit: "
+            f"{identiteit_overzicht['zonder_identiteit']}\n"
+        )
+        for bron, aantal in identiteit_overzicht["bronnen"].items():
+            f.write(f"Bron {bron}: {aantal}\n")
+        f.write("\n")
+
+        for item in recovery_items:
+            if item["bepaalde_titel"] is None:
+                reden = (
+                    item["identiteit_reden"]
+                    or item["identiteit_bron"]
+                    or "niet bepaald"
+                )
+                f.write(
+                    f"Geen identiteit: ID {item['id']} | "
+                    f"{item['rar_set_key']} | "
+                    f"{item['verwacht_rel_pad']} | "
+                    f"{reden}\n"
+                )
+        f.write("\n")
 
         if nul_bytes:
 
