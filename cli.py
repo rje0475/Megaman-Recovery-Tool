@@ -4,6 +4,7 @@ from pathlib import Path
 
 from analyse import AnalyseFout, voer_analyse
 from database import DATABASE_BESTAND
+from rar_extractor import ExtractieFout
 
 
 BANNER = (
@@ -24,12 +25,21 @@ def maak_parser():
             "Voorbeelden:\n"
             "  python main.py\n"
             "  python main.py --analyze \"C:\\pad\\naar\\map\"\n"
+            "  python main.py --extract \"C:\\pad\\naar\\downloadmap\"\n"
             "  python main.py --demo\n"
             "  python main.py --report"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     acties = parser.add_mutually_exclusive_group()
+    acties.add_argument(
+        "--extract",
+        metavar="DOWNLOADMAP",
+        help=(
+            "pak RAR-sets met een laatste PAR2-status COMPLETE uit naar "
+            "de submap 'extracted'"
+        ),
+    )
     acties.add_argument(
         "--analyze",
         metavar="MAP",
@@ -100,6 +110,12 @@ def main(argv=None, invoer=input, uitvoer=None):
             return 0
         if args.report:
             return toon_laatste_rapport(uitvoer=uitvoer)
+        if args.extract:
+            from rar_extractor import voer_extractie_uit
+            overzicht = voer_extractie_uit(
+                Path(args.extract.strip('"')), uitvoer=uitvoer
+            )
+            return 1 if overzicht.mislukt else 0
         if args.analyze:
             map_pad = Path(args.analyze.strip('"'))
             voer_analyse(map_pad, map_pad, uitvoer=uitvoer)
@@ -109,7 +125,7 @@ def main(argv=None, invoer=input, uitvoer=None):
         voer_analyse(mp3_map, rar_map, uitvoer=uitvoer)
         invoer("\nDruk op Enter om af te sluiten...")
         return 0
-    except (AnalyseFout, OSError, ValueError) as fout:
+    except (AnalyseFout, ExtractieFout, OSError, ValueError) as fout:
         uitvoer.write(f"FOUT: {fout}\n")
         return 1
     except KeyboardInterrupt:

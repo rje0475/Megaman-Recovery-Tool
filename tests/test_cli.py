@@ -18,6 +18,7 @@ class CliTest(unittest.TestCase):
                 cli.main(["--help"])
         self.assertEqual(afsluiting.exception.code, 0)
         self.assertIn("--analyze", uitvoer.getvalue())
+        self.assertIn("--extract", uitvoer.getvalue())
         self.assertIn("Voorbeelden:", uitvoer.getvalue())
         self.assertIn("zonder bestanden te repareren", uitvoer.getvalue())
 
@@ -74,6 +75,30 @@ class CliTest(unittest.TestCase):
             code = cli.main(["--demo"], uitvoer=io.StringIO())
         self.assertEqual(code, 0)
         demo.assert_called_once()
+
+    def test_extract_gebruikt_aparte_schrijvende_workflow(self):
+        overzicht = Mock(mislukt=0)
+        with patch(
+            "rar_extractor.voer_extractie_uit", return_value=overzicht
+        ) as extractie:
+            code = cli.main(
+                ["--extract", r"C:\demo\download"],
+                uitvoer=io.StringIO(),
+            )
+        self.assertEqual(code, 0)
+        extractie.assert_called_once_with(
+            Path(r"C:\demo\download"), uitvoer=unittest.mock.ANY
+        )
+
+    def test_extract_geeft_exitcode_een_bij_mislukking(self):
+        overzicht = Mock(mislukt=1)
+        with patch(
+            "rar_extractor.voer_extractie_uit", return_value=overzicht
+        ):
+            code = cli.main(
+                ["--extract", "."], uitvoer=io.StringIO()
+            )
+        self.assertEqual(code, 1)
 
     def test_report_zonder_database(self):
         with tempfile.TemporaryDirectory() as tijdelijke_map:
