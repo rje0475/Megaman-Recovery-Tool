@@ -135,3 +135,28 @@ overgeslagen. Na een geslaagde repair-opdracht wordt de dataset automatisch
 opnieuw geverifieerd en worden de actuele status, procesuitvoer, tijden,
 exitcode en eventuele foutmelding in SQLite opgeslagen. `--analyze` blijft
 read-only en start nooit een reparatie.
+
+# Desktop-GUI
+
+Installeer eerst alle afhankelijkheden:
+
+```powershell
+python -m pip install -r requirements.txt
+```
+
+Start daarna de PySide6-interface:
+
+```powershell
+python main.py --gui
+```
+
+De GUI biedt vier expliciete acties:
+
+- **Analyseren** gebruikt de bestaande read-only analyse.
+- **Repareren** verwerkt uitsluitend PAR2-datasets met status `REPAIRABLE`.
+- **Uitpakken** verwerkt uitsluitend datasets met status `COMPLETE`.
+- **Rapport tonen** toont het laatst opgeslagen rapport.
+
+Repareren kan bronbestanden wijzigen of aanmaken. Uitpakken maakt bestanden
+aan in de extractiedoelmap. Daarom vraagt de GUI voor beide acties altijd om
+bevestiging; analyse start nooit automatisch een reparatie of extractie.
