@@ -119,3 +119,19 @@ De opdracht leest de laatste opgeslagen PAR2-verificatie uit
 ontbrekende verificatie worden overgeslagen. De uitvoer komt standaard in de
 submap `extracted`; bestaande bestanden worden niet overschreven. Resultaten
 en skips worden opgeslagen in de SQLite-tabel `extraction_results`.
+
+# PAR2-reparatie
+
+Na een analyse kunnen uitsluitend als `REPAIRABLE` aangemerkte PAR2-datasets
+expliciet worden gerepareerd met de officiële CLI-optie `--repair "<map>"`:
+
+```powershell
+python main.py --repair "C:\pad\naar\downloadmap"
+```
+
+De opdracht gebruikt dezelfde `PAR2_PATH`-, PATH- en vaste-paddetectie als de
+read-only verificatie. `COMPLETE`, `NOT_REPAIRABLE` en andere statussen worden
+overgeslagen. Na een geslaagde repair-opdracht wordt de dataset automatisch
+opnieuw geverifieerd en worden de actuele status, procesuitvoer, tijden,
+exitcode en eventuele foutmelding in SQLite opgeslagen. `--analyze` blijft
+read-only en start nooit een reparatie.

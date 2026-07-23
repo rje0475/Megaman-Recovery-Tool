@@ -109,6 +109,18 @@ def maak_verify_opdracht(executable, par2_file):
     return (str(executable), subcommand, str(par2_file))
 
 
+def maak_repair_opdracht(executable, par2_file):
+    """Maak de expliciete repair-opdracht voor par2cmdline of MultiPar."""
+
+    executable = Path(executable)
+    par2_file = Path(par2_file).resolve()
+    subcommand = (
+        "r" if executable.name.casefold() in ("par2j.exe", "par2j64.exe")
+        else "repair"
+    )
+    return (str(executable), subcommand, str(par2_file))
+
+
 def classificeer_par2_resultaat(stdout, stderr, return_code):
     """Classificeer volledige stdout+stderr met negatieve patronen eerst."""
 

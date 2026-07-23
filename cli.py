@@ -4,6 +4,7 @@ from pathlib import Path
 
 from analyse import AnalyseFout, voer_analyse
 from database import DATABASE_BESTAND
+from par2_repair import Par2RepairFout
 from rar_extractor import ExtractieFout
 
 
@@ -17,6 +18,7 @@ BANNER = (
 def maak_parser():
     parser = argparse.ArgumentParser(
         prog="python main.py",
+        allow_abbrev=False,
         description=(
             "Analyseer MP3-, RAR- en PAR2-bestanden zonder bestanden te "
             "repareren, uit te pakken, te verplaatsen of te verwijderen."
@@ -25,6 +27,7 @@ def maak_parser():
             "Voorbeelden:\n"
             "  python main.py\n"
             "  python main.py --analyze \"C:\\pad\\naar\\map\"\n"
+            "  python main.py --repair \"C:\\pad\\naar\\map\"\n"
             "  python main.py --extract \"C:\\pad\\naar\\downloadmap\"\n"
             "  python main.py --demo\n"
             "  python main.py --report"
@@ -32,6 +35,14 @@ def maak_parser():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     acties = parser.add_mutually_exclusive_group()
+    acties.add_argument(
+        "--repair",
+        metavar="MAP",
+        help=(
+            "repareer uitsluitend PAR2-datasets met de opgeslagen status "
+            "REPAIRABLE en verifieer ze daarna opnieuw"
+        ),
+    )
     acties.add_argument(
         "--extract",
         metavar="DOWNLOADMAP",
@@ -110,6 +121,12 @@ def main(argv=None, invoer=input, uitvoer=None):
             return 0
         if args.report:
             return toon_laatste_rapport(uitvoer=uitvoer)
+        if args.repair:
+            from par2_repair import voer_par2_reparatie_uit
+            overzicht = voer_par2_reparatie_uit(
+                Path(args.repair.strip('"')), uitvoer=uitvoer
+            )
+            return 1 if overzicht.mislukt else 0
         if args.extract:
             from rar_extractor import voer_extractie_uit
             overzicht = voer_extractie_uit(
@@ -125,7 +142,9 @@ def main(argv=None, invoer=input, uitvoer=None):
         voer_analyse(mp3_map, rar_map, uitvoer=uitvoer)
         invoer("\nDruk op Enter om af te sluiten...")
         return 0
-    except (AnalyseFout, ExtractieFout, OSError, ValueError) as fout:
+    except (
+        AnalyseFout, ExtractieFout, Par2RepairFout, OSError, ValueError
+    ) as fout:
         uitvoer.write(f"FOUT: {fout}\n")
         return 1
     except KeyboardInterrupt:
