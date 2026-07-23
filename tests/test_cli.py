@@ -19,6 +19,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(afsluiting.exception.code, 0)
         self.assertIn("--analyze", uitvoer.getvalue())
         self.assertIn("--extract", uitvoer.getvalue())
+        self.assertIn("--repair", uitvoer.getvalue())
         self.assertIn("Voorbeelden:", uitvoer.getvalue())
         self.assertIn("zonder bestanden te repareren", uitvoer.getvalue())
 
@@ -99,6 +100,33 @@ class CliTest(unittest.TestCase):
                 ["--extract", "."], uitvoer=io.StringIO()
             )
         self.assertEqual(code, 1)
+
+    def test_repair_gebruikt_aparte_schrijvende_workflow(self):
+        overzicht = Mock(mislukt=0)
+        with patch(
+            "par2_repair.voer_par2_reparatie_uit",
+            return_value=overzicht,
+        ) as reparatie:
+            code = cli.main(
+                ["--repair", r"C:\demo\download"],
+                uitvoer=io.StringIO(),
+            )
+        self.assertEqual(code, 0)
+        reparatie.assert_called_once_with(
+            Path(r"C:\demo\download"), uitvoer=unittest.mock.ANY
+        )
+
+    def test_ontbrekende_repair_tool_crasht_cli_niet(self):
+        with patch(
+            "par2_repair.voer_par2_reparatie_uit",
+            side_effect=cli.Par2RepairFout("PAR2-tool niet gevonden"),
+        ):
+            uitvoer = io.StringIO()
+            code = cli.main(
+                ["--repair", "."], uitvoer=uitvoer
+            )
+        self.assertEqual(code, 1)
+        self.assertIn("PAR2-tool niet gevonden", uitvoer.getvalue())
 
     def test_report_zonder_database(self):
         with tempfile.TemporaryDirectory() as tijdelijke_map:

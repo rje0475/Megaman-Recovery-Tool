@@ -12,6 +12,7 @@ from par2_verifier import (
     MAX_PROCESUITVOER,
     Par2Executable,
     classificeer_par2_resultaat,
+    maak_repair_opdracht,
     vind_par2_executable,
     voer_par2_verificatie_uit,
 )
@@ -186,6 +187,13 @@ class Par2ProcesTest(unittest.TestCase):
         )
         self.assertEqual(gezien["command"][1], "v")
         self.assertEqual(resultaat.return_code, 9)
+
+    def test_repair_opdracht_gebruikt_juiste_subcommands(self):
+        standaard = maak_repair_opdracht(self.exe, self.par)
+        par2j = self.exe.with_name("par2j64.exe")
+        self.assertEqual(standaard[1], "repair")
+        self.assertEqual(maak_repair_opdracht(par2j, self.par)[1], "r")
+        self.assertEqual(standaard[2], str(self.par.resolve()))
 
     def test_timeout_wordt_unknown(self):
         def runner(*args, **kwargs):

@@ -299,6 +299,26 @@ class SQLiteDatabase:
             )
             """
         )
+        self.verbinding.execute(
+            """
+            CREATE TABLE IF NOT EXISTS par_repair_results (
+                id INTEGER PRIMARY KEY,
+                par_set_key TEXT NOT NULL,
+                par2_file TEXT NOT NULL,
+                status_before TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                finished_at TEXT NOT NULL,
+                executable_path TEXT,
+                command TEXT,
+                exit_code INTEGER,
+                result TEXT NOT NULL,
+                final_status TEXT,
+                stdout TEXT NOT NULL DEFAULT '',
+                stderr TEXT NOT NULL DEFAULT '',
+                last_error TEXT
+            )
+            """
+        )
         kolommen = {
             rij["name"]
             for rij in self.verbinding.execute(
