@@ -1,0 +1,37 @@
+=====================================
+Megaman Recovery Tool
+=====================================
+
+Map: D:\scrapers\Megaman2006\2006
+
+Totaal MP3's : 738
+Bestanden OK : 676
+0-byte       : 25
+
+0-byte bestanden
+------------------------------
+Week06\Schele Daan  (Uut de Kraayenhofflaan) - Al mot ik krupen.mp3
+Week07\René Riva - C'est la vie (D.J. Goldfinger Remix).mp3
+Week08\4 AM - Livin on love.mp3
+Week08\Raymond Havelaar & Theo van Veghel - Bij ons staat op de keukendeur.mp3
+Week11\Rick van der Kroon - Verlaat me niet.mp3
+Week16\Bubba Sparxxx ft. Ying Yang Twins and Mr. Collipark - Ms. New Booty.mp3
+Week16\Lady Di, Soesie B & Derenzo - Het lot.mp3
+Week16\Sarah Bettens - Come over here.mp3
+Week16\Shakira ft. Wyclef Jean - Hips don't lie.mp3
+Week17\Rene Schuurmans - Ik droom je terug bij mij.mp3
+Week19\Mieke - Boom bang-a-bang.mp3
+Week19\The Sheer - The girl that lost her mind part 1.mp3
+Week21\06210088 Deborah - Elke Keer.mp3
+Week24\06240038 Michael Jackson - They Don't Care About Us.mp3
+Week29\06290071 Darryl - Rellen En Rennen (De Megaman).mp3
+Week36\06360007 Justin Timberlake - SexyBack.mp3
+Week36\06360067 Gnarls Barkley - Smiley Faces (Radio Edit).mp3
+Week37\06370052 Muse - Starlight.mp3
+Week37\06370081 Bouke - Kom Maar, Kom Maar.mp3
+Week37\06370083 John Mayer - Waiting On The World To Change.mp3
+Week40\06400089 Grad Damen - Granada.mp3
+Week41\06410080 John de Bever & Anny Schilder - Toen Kwam Jij.mp3
+Week44\06440086 Marga Bult & Wim Rijken - Wie Weet Wat Liefde Is.mp3
+Week45\06450032 Madonna - Jump (Radio Edit).mp3
+Week45\06450094 Paul De Leeuw - Ga Niet Weg.mp3

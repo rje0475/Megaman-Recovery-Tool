@@ -1,0 +1,342 @@
+=====================================
+Megaman Recovery Tool
+=====================================
+
+Map: D:\scrapers\Megaman2006\2006
+
+Totaal MP3's : 738
+Bestanden OK : 675
+0-byte       : 25
+RAR fouten   : 63
+FFmpeg fouten: 27
+
+0-byte bestanden
+------------------------------
+Week06\Schele Daan  (Uut de Kraayenhofflaan) - Al mot ik krupen.mp3
+Week07\René Riva - C'est la vie (D.J. Goldfinger Remix).mp3
+Week08\4 AM - Livin on love.mp3
+Week08\Raymond Havelaar & Theo van Veghel - Bij ons staat op de keukendeur.mp3
+Week11\Rick van der Kroon - Verlaat me niet.mp3
+Week16\Bubba Sparxxx ft. Ying Yang Twins and Mr. Collipark - Ms. New Booty.mp3
+Week16\Lady Di, Soesie B & Derenzo - Het lot.mp3
+Week16\Sarah Bettens - Come over here.mp3
+Week16\Shakira ft. Wyclef Jean - Hips don't lie.mp3
+Week17\Rene Schuurmans - Ik droom je terug bij mij.mp3
+Week19\Mieke - Boom bang-a-bang.mp3
+Week19\The Sheer - The girl that lost her mind part 1.mp3
+Week21\06210088 Deborah - Elke Keer.mp3
+Week24\06240038 Michael Jackson - They Don't Care About Us.mp3
+Week29\06290071 Darryl - Rellen En Rennen (De Megaman).mp3
+Week36\06360007 Justin Timberlake - SexyBack.mp3
+Week36\06360067 Gnarls Barkley - Smiley Faces (Radio Edit).mp3
+Week37\06370052 Muse - Starlight.mp3
+Week37\06370081 Bouke - Kom Maar, Kom Maar.mp3
+Week37\06370083 John Mayer - Waiting On The World To Change.mp3
+Week40\06400089 Grad Damen - Granada.mp3
+Week41\06410080 John de Bever & Anny Schilder - Toen Kwam Jij.mp3
+Week44\06440086 Marga Bult & Wim Rijken - Wie Weet Wat Liefde Is.mp3
+Week45\06450032 Madonna - Jump (Radio Edit).mp3
+Week45\06450094 Paul De Leeuw - Ga Niet Weg.mp3
+
+RAR fouten
+------------------------------
+[Data Error] Week02\Erick E ft. Gina J - Boogie down (Radio Edit).mp3
+[Data Error] Week05\Chris Brown ft. Juelz Santana - Run it!.mp3
+[Data Error] Week05\Mariah Carey - Don't Forget About Us.mp3
+[Data Error] Week06\Schele Daan  (Uut de Kraayenhofflaan) - Al mot ik krupen.mp3
+[Data Error] Week07\René Riva - C'est la vie (D.J. Goldfinger Remix).mp3
+[Data Error] Week08\4 AM - Livin on love.mp3
+[Data Error] Week08\Belle Perez - El mundo bailando (Radio Edit).mp3
+[Data Error] Week08\Lawineboys - Op de buhne.mp3
+[Data Error] Week08\Michael Jackson - Don't stop 'til you get enough.mp3
+[Data Error] Week08\Raymond Havelaar & Theo van Veghel - Bij ons staat op de keukendeur.mp3
+[Data Error] Week10\Vorwerk - Cambodia (Radio Edit).mp3
+[Data Error] Week11\Rick van der Kroon - Verlaat me niet.mp3
+[Data Error] Week12\Laura Lynn - Casanova.mp3
+[Data Error] Week13\Banaroo - Dubi dam dam (Radio Edit).mp3
+[Data Error] Week16\All-Music - Seasons of love.mp3
+[Data Error] Week16\Bubba Sparxxx ft. Ying Yang Twins and Mr. Collipark - Ms. New Booty.mp3
+[Data Error] Week16\Jim - Dapper en sterk.mp3
+[Data Error] Week16\Lady Di, Soesie B & Derenzo - Het lot.mp3
+[Data Error] Week16\Sarah Bettens - Come over here.mp3
+[Data Error] Week16\Shakira ft. Wyclef Jean - Hips don't lie.mp3
+[Data Error] Week17\Rene Schuurmans - Ik droom je terug bij mij.mp3
+[CRC Failed] Week19\Beatfreakz - Somebodys watching me (Hi Tack Radio Edit).mp3
+[Data Error] Week19\Coldplay - The hardest part.mp3
+[Data Error] Week19\Michael Jackson - In the closet.mp3
+[Data Error] Week19\Mieke - Boom bang-a-bang.mp3
+[Data Error] Week19\The Sheer - The girl that lost her mind part 1.mp3
+[Data Error] Week21\06210071 Emerald - A Brand New Day.mp3
+[Data Error] Week21\06210087 Lucie Silvas - What You're Made Of (And Metropole Orchestra).mp3
+[Data Error] Week21\06210088 Deborah - Elke Keer.mp3
+[Data Error] Week24\06240038 Michael Jackson - They Don't Care About Us.mp3
+[Data Error] Week24\06240097 Johan - Oceans.mp3
+[Data Error] Week25\06250076 Menno De Jong & Leon Bolier Pres. Solar Express - Magma.mp3
+[Data Error] Week25\06250092 Delacy - Hideaway (Delacy vs. The Young Punx Remix).mp3
+[Data Error] Week26\06260100 Crazy Frog - We Are The Champions (Ding A Dang Dong) (Radio Edit).mp3
+[Data Error] Week28\06280034 Boris - Within My Hands.mp3
+[Data Error] Week28\06280058 Stef Ekkel - De Woonboot.mp3
+[Data Error] Week29\06290071 Darryl - Rellen En Rennen (De Megaman).mp3
+[Data Error] Week33\06330094 D.J. Jose - Dedication (Radio Edit).mp3
+[Data Error] Week34\06340004 Tiësto feat. Maxi Jazz - Dance 4 Life.mp3
+[CRC Failed] Week34\06340073 Re Locate - Rogue.mp3
+[Data Error] Week36\06360007 Justin Timberlake - SexyBack.mp3
+[Data Error] Week36\06360029 Nelly Furtado feat. Timbaland - Promiscuous.mp3
+[Data Error] Week36\06360032 Scissor Sisters - I Don't Feel Like Dancin'.mp3
+[Data Error] Week36\06360067 Gnarls Barkley - Smiley Faces (Radio Edit).mp3
+[Data Error] Week36\06360070 E Craig - Home (Vocal Mix).mp3
+[Data Error] Week37\06370033 John Marks - Carnival.mp3
+[Data Error] Week37\06370052 Muse - Starlight.mp3
+[Data Error] Week37\06370077 Wolter Kroes - Geen Dag Voorbij.mp3
+[Data Error] Week37\06370081 Bouke - Kom Maar, Kom Maar.mp3
+[Data Error] Week37\06370083 John Mayer - Waiting On The World To Change.mp3
+[Data Error] Week37\06370092 The Veronicas - 4ever.mp3
+[Data Error] Week37\06370094 Omaha - You Came Into My Life (Narcotic Thrust Radio Edit).mp3
+[Data Error] Week38\06380006 Frans Bauer - Un Dos Tres.mp3
+[Data Error] Week38\06380012-A Nick & Simon - Vaarwel Verleden.mp3
+[CRC Failed] Week39\06390065 Giuseppe Ottaviani & Marc Van Linden - Until Monday (Original Mix).mp3
+[Data Error] Week40\06400087 Van Velzen - Baby Get Higher.mp3
+[Data Error] Week40\06400089 Grad Damen - Granada.mp3
+[Data Error] Week41\06410080 John de Bever & Anny Schilder - Toen Kwam Jij.mp3
+[Data Error] Week44\06440086 Marga Bult & Wim Rijken - Wie Weet Wat Liefde Is.mp3
+[Data Error] Week45\06450032 Madonna - Jump (Radio Edit).mp3
+[Data Error] Week45\06450094 Paul De Leeuw - Ga Niet Weg.mp3
+[Data Error] Week47\06470088 Djumbo - Undercover.mp3
+[Data Error] Week49\06490097 I.O.S - Meer Van Jou.mp3
+
+FFmpeg fouten
+------------------------------
+[Header missing] Week02\Erick E ft. Gina J - Boogie down (Radio Edit).mp3
+    [mp3float @ 00000256410d4480] Header missing
+[aist#0:0/mp3 @ 00000256410c3f40] [dec:mp3float @ 00000256410c5e40] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 00000256410d4480] Header missing
+[aist#0:0/mp3 @ 00000256410c3f40] [dec:mp3float @ 00000256410c5e40] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 00000256410d4480] Header missing
+[aist#0:0/mp3 @ 00000256410c3f40] [dec:mp3float @ 00000256410c5e40] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 00000256410d4480] Header missing
+[aist#0:0/mp3 @ 00000256410c3f40] [dec:mp3float @ 00000256410c5e40] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 00000256410d4480] Header missing
+[aist#0:0/mp3 @ 00000256410c3f40] [dec:mp3float @ 00000256410c5e40] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 00000256410d4480] Header missing
+[aist#0:0/mp3 @ 00000256410c3f40] [dec:mp3float @ 00000256410c5e40] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 00000256410d4480] Header missing
+[aist#0:0/mp3 @ 00000256410c3f40] [dec:mp3float @ 00000256410c5e40] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 00000256410d4480] Header missing
+[aist#0:0/mp3 @ 00000256410c3f40] [dec:mp3float @ 00000256410c5e40] Error submitting packet to decoder: Invalid data found when processing input
+
+[Header missing] Week05\Chris Brown ft. Juelz Santana - Run it!.mp3
+    [mp3float @ 000002721b6248c0] Header missing
+[aist#0:0/mp3 @ 000002721b613400] [dec:mp3float @ 000002721b624340] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 000002721b6248c0] Header missing
+[aist#0:0/mp3 @ 000002721b613400] [dec:mp3float @ 000002721b624340] Error submitting packet to decoder: Invalid data found when processing input
+
+[Invalid data] Week08\Belle Perez - El mundo bailando (Radio Edit).mp3
+    [aist#0:0/mp3 @ 00000224ef764e40] [dec:mp3float @ 00000224ef76c940] Error submitting packet to decoder: Invalid data found when processing input
+
+[Header missing] Week08\Lawineboys - Op de buhne.mp3
+    [mp3float @ 000001aff46d4540] Header missing
+[aist#0:0/mp3 @ 000001aff46c4000] [dec:mp3float @ 000001aff46c5e40] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 000001aff46d4540] Header missing
+[aist#0:0/mp3 @ 000001aff46c4000] [dec:mp3float @ 000001aff46c5e40] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 000001aff46d4540] Header missing
+[aist#0:0/mp3 @ 000001aff46c4000] [dec:mp3float @ 000001aff46c5e40] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 000001aff46d4540] Header missing
+[aist#0:0/mp3 @ 000001aff46c4000] [dec:mp3float @ 000001aff46c5e40] Error submitting packet to decoder: Invalid data found when processing input
+
+[Invalid data] Week08\Michael Jackson - Don't stop 'til you get enough.mp3
+    [aist#0:0/mp3 @ 000002c1d0503180] [dec:mp3float @ 000002c1d050a740] Error submitting packet to decoder: Invalid data found when processing input
+
+[Header missing] Week16\All-Music - Seasons of love.mp3
+    [mp3float @ 0000020e34373040] Header missing
+[aist#0:0/mp3 @ 0000020e3436a280] [dec:mp3float @ 0000020e34364c00] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 0000020e34373040] Header missing
+[aist#0:0/mp3 @ 0000020e3436a280] [dec:mp3float @ 0000020e34364c00] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 0000020e34373040] Header missing
+[aist#0:0/mp3 @ 0000020e3436a280] [dec:mp3float @ 0000020e34364c00] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 0000020e34373040] Header missing
+[aist#0:0/mp3 @ 0000020e3436a280] [dec:mp3float @ 0000020e34364c00] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 0000020e34373040] Header missing
+[aist#0:0/mp3 @ 0000020e3436a280] [dec:mp3float @ 0000020e34364c00] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 0000020e34373040] Header missing
+[aist#0:0/mp3 @ 0000020e3436a280] [dec:mp3float @ 0000020e34364c00] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 0000020e34373040] Header missing
+[aist#0:0/mp3 @ 0000020e3436a280] [dec:mp3float @ 0000020e34364c00] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 0000020e34373040] Header missing
+[aist#0:0/mp3 @ 0000020e3436a280] [dec:mp3float @ 0000020e34364c00] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 0000020e34373040] Header missing
+[aist#0:0/mp3 @ 0000020e3436a280] [dec:mp3float @ 0000020e34364c00] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 0000020e34373040] Header missing
+[aist#0:0/mp3 @ 0000020e3436a280] [dec:mp3float @ 0000020e34364c00] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 0000020e34373040] Header missing
+[aist#0:0/mp3 @ 0000020e3436a280] [dec:mp3float @ 0000020e34364c00] Error submitting packet to decoder: Invalid data found when processing input
+
+[Header missing] Week16\Jim - Dapper en sterk.mp3
+    [mp3float @ 0000028e2e9b4100] Header missing
+[aist#0:0/mp3 @ 0000028e2e9ab300] [dec:mp3float @ 0000028e2e9a5c80] Error submitting packet to decoder: Invalid data found when processing input
+
+[Header missing] Week19\Beatfreakz - Somebodys watching me (Hi Tack Radio Edit).mp3
+    [mp3float @ 000002c400918a80] Header missing
+[aist#0:0/mp3 @ 000002c400918040] [dec:mp3float @ 000002c40091b040] Error submitting packet to decoder: Invalid data found when processing input
+
+[Invalid data] Week19\Coldplay - The hardest part.mp3
+    [aist#0:0/mp3 @ 00000195b8d63cc0] [dec:mp3float @ 00000195b8d65bc0] Error submitting packet to decoder: Invalid data found when processing input
+
+[Invalid data] Week19\Michael Jackson - In the closet.mp3
+    [aist#0:0/mp3 @ 000001d161c43e80] [dec:mp3float @ 000001d161c45d80] Error submitting packet to decoder: Invalid data found when processing input
+
+[Header missing] Week21\06210071 Emerald - A Brand New Day.mp3
+    [mp3float @ 000001fa080434c0] Header missing
+[aist#0:0/mp3 @ 000001fa08034380] [dec:mp3float @ 000001fa08042f40] Error submitting packet to decoder: Invalid data found when processing input
+
+[Invalid data] Week21\06210087 Lucie Silvas - What You're Made Of (And Metropole Orchestra).mp3
+    [aist#0:0/mp3 @ 0000022f58f03c80] [dec:mp3float @ 0000022f58f03e80] Error submitting packet to decoder: Invalid data found when processing input
+
+[Header missing] Week24\06240097 Johan - Oceans.mp3
+    [mp3float @ 000001fb89cc6dc0] Header missing
+[aist#0:0/mp3 @ 000001fb89ccb300] [dec:mp3float @ 000001fb89cc6840] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 000001fb89cc6dc0] Header missing
+[aist#0:0/mp3 @ 000001fb89ccb300] [dec:mp3float @ 000001fb89cc6840] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 000001fb89cc6dc0] Header missing
+[aist#0:0/mp3 @ 000001fb89ccb300] [dec:mp3float @ 000001fb89cc6840] Error submitting packet to decoder: Invalid data found when processing input
+
+[Invalid data] Week25\06250076 Menno De Jong & Leon Bolier Pres. Solar Express - Magma.mp3
+    [aist#0:0/mp3 @ 000002382c095a00] [dec:mp3float @ 000002382c096fc0] Error submitting packet to decoder: Invalid data found when processing input
+
+[Header missing] Week25\06250092 Delacy - Hideaway (Delacy vs. The Young Punx Remix).mp3
+    [mp3float @ 000002309df47400] Header missing
+[aist#0:0/mp3 @ 000002309df43d00] [dec:mp3float @ 000002309df46e80] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 000002309df47400] Header missing
+[aist#0:0/mp3 @ 000002309df43d00] [dec:mp3float @ 000002309df46e80] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 000002309df47400] Header missing
+[aist#0:0/mp3 @ 000002309df43d00] [dec:mp3float @ 000002309df46e80] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 000002309df47400] Header missing
+[aist#0:0/mp3 @ 000002309df43d00] [dec:mp3float @ 000002309df46e80] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 000002309df47400] Header missing
+[aist#0:0/mp3 @ 000002309df43d00] [dec:mp3float @ 000002309df46e80] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 000002309df47400] Header missing
+[aist#0:0/mp3 @ 000002309df43d00] [dec:mp3float @ 000002309df46e80] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 000002309df47400] Header missing
+[aist#0:0/mp3 @ 000002309df43d00] [dec:mp3float @ 000002309df46e80] Error submitting packet to decoder: Invalid data found when processing input
+
+[Invalid data] Week26\06260100 Crazy Frog - We Are The Champions (Ding A Dang Dong) (Radio Edit).mp3
+    [aist#0:0/mp3 @ 0000026a16725f40] [dec:mp3float @ 0000026a16727840] Error submitting packet to decoder: Invalid data found when processing input
+
+[Header missing] Week33\06330094 D.J. Jose - Dedication (Radio Edit).mp3
+    [mp3float @ 00000222063c7400] Header missing
+[aist#0:0/mp3 @ 00000222063c58c0] [dec:mp3float @ 00000222063c6e40] Error submitting packet to decoder: Invalid data found when processing input
+
+[Header missing] Week34\06340004 Tiësto feat. Maxi Jazz - Dance 4 Life.mp3
+    [mp3float @ 0000012b1d396e80] Header missing
+[aist#0:0/mp3 @ 0000012b1d395340] [dec:mp3float @ 0000012b1d3968c0] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 0000012b1d396e80] Header missing
+[aist#0:0/mp3 @ 0000012b1d395340] [dec:mp3float @ 0000012b1d3968c0] Error submitting packet to decoder: Invalid data found when processing input
+
+[Header missing] Week36\06360032 Scissor Sisters - I Don't Feel Like Dancin'.mp3
+    [mp3float @ 000001a22f168400] Header missing
+[aist#0:0/mp3 @ 000001a22f1668c0] [dec:mp3float @ 000001a22f167e80] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 000001a22f168400] Header missing
+[aist#0:0/mp3 @ 000001a22f1668c0] [dec:mp3float @ 000001a22f167e80] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 000001a22f168400] Header missing
+[aist#0:0/mp3 @ 000001a22f1668c0] [dec:mp3float @ 000001a22f167e80] Error submitting packet to decoder: Invalid data found when processing input
+
+[Header missing] Week36\06360070 E Craig - Home (Vocal Mix).mp3
+    [mp3float @ 0000020dd66c3340] Header missing
+[aist#0:0/mp3 @ 0000020dd66b41c0] [dec:mp3float @ 0000020dd66c2d80] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 0000020dd66c3340] Header missing
+[aist#0:0/mp3 @ 0000020dd66b41c0] [dec:mp3float @ 0000020dd66c2d80] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 0000020dd66c3340] Header missing
+[aist#0:0/mp3 @ 0000020dd66b41c0] [dec:mp3float @ 0000020dd66c2d80] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 0000020dd66c3340] Header missing
+[aist#0:0/mp3 @ 0000020dd66b41c0] [dec:mp3float @ 0000020dd66c2d80] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 0000020dd66c3340] Header missing
+[aist#0:0/mp3 @ 0000020dd66b41c0] [dec:mp3float @ 0000020dd66c2d80] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 0000020dd66c3340] Header missing
+[aist#0:0/mp3 @ 0000020dd66b41c0] [dec:mp3float @ 0000020dd66c2d80] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 0000020dd66c3340] Header missing
+[aist#0:0/mp3 @ 0000020dd66b41c0] [dec:mp3float @ 0000020dd66c2d80] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 0000020dd66c3340] Header missing
+[aist#0:0/mp3 @ 0000020dd66b41c0] [dec:mp3float @ 0000020dd66c2d80] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 0000020dd66c3340] Header missing
+[aist#0:0/mp3 @ 0000020dd66b41c0] [dec:mp3float @ 0000020dd66c2d80] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 0000020dd66c3340] Header missing
+[aist#0:0/mp3 @ 0000020dd66b41c0] [dec:mp3float @ 0000020dd66c2d80] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 0000020dd66c3340] Header missing
+[aist#0:0/mp3 @ 0000020dd66b41c0] [dec:mp3float @ 0000020dd66c2d80] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 0000020dd66c3340] Header missing
+[aist#0:0/mp3 @ 0000020dd66b41c0] [dec:mp3float @ 0000020dd66c2d80] Error submitting packet to decoder: Invalid data found when processing input
+
+[Header missing] Week37\06370033 John Marks - Carnival.mp3
+    [mp3float @ 000001eeab234c80] Header missing
+[aist#0:0/mp3 @ 000001eeab22be40] [dec:mp3float @ 000001eeab227d40] Error submitting packet to decoder: Invalid data found when processing input
+
+[Header missing] Week37\06370077 Wolter Kroes - Geen Dag Voorbij.mp3
+    [mp3float @ 0000014d9eb1a780] Header missing
+[aist#0:0/mp3 @ 0000014d9eb174c0] [dec:mp3float @ 0000014d9eb1a140] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 0000014d9eb1a780] Header missing
+[aist#0:0/mp3 @ 0000014d9eb174c0] [dec:mp3float @ 0000014d9eb1a140] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 0000014d9eb1a780] Header missing
+[aist#0:0/mp3 @ 0000014d9eb174c0] [dec:mp3float @ 0000014d9eb1a140] Error submitting packet to decoder: Invalid data found when processing input
+
+[Header missing] Week37\06370092 The Veronicas - 4ever.mp3
+    [mp3float @ 00000227917e7200] Header missing
+[aist#0:0/mp3 @ 00000227917e5380] [dec:mp3float @ 00000227917e6c40] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 00000227917e7200] Header missing
+[aist#0:0/mp3 @ 00000227917e5380] [dec:mp3float @ 00000227917e6c40] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 00000227917e7200] Header missing
+[aist#0:0/mp3 @ 00000227917e5380] [dec:mp3float @ 00000227917e6c40] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 00000227917e7200] Header missing
+[aist#0:0/mp3 @ 00000227917e5380] [dec:mp3float @ 00000227917e6c40] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 00000227917e7200] Header missing
+[aist#0:0/mp3 @ 00000227917e5380] [dec:mp3float @ 00000227917e6c40] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 00000227917e7200] Header missing
+[aist#0:0/mp3 @ 00000227917e5380] [dec:mp3float @ 00000227917e6c40] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 00000227917e7200] Header missing
+[aist#0:0/mp3 @ 00000227917e5380] [dec:mp3float @ 00000227917e6c40] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 00000227917e7200] Header missing
+[aist#0:0/mp3 @ 00000227917e5380] [dec:mp3float @ 00000227917e6c40] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 00000227917e7200] Header missing
+[aist#0:0/mp3 @ 00000227917e5380] [dec:mp3float @ 00000227917e6c40] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 00000227917e7200] Header missing
+[aist#0:0/mp3 @ 00000227917e5380] [dec:mp3float @ 00000227917e6c40] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 00000227917e7200] Header missing
+[aist#0:0/mp3 @ 00000227917e5380] [dec:mp3float @ 00000227917e6c40] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 00000227917e7200] Header missing
+[aist#0:0/mp3 @ 00000227917e5380] [dec:mp3float @ 00000227917e6c40] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 00000227917e7200] Header missing
+[aist#0:0/mp3 @ 00000227917e5380] [dec:mp3float @ 00000227917e6c40] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 00000227917e7200] Header missing
+[aist#0:0/mp3 @ 00000227917e5380] [dec:mp3float @ 00000227917e6c40] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 00000227917e7200] Header missing
+[aist#0:0/mp3 @ 00000227917e5380] [dec:mp3float @ 00000227917e6c40] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 00000227917e7200] Header missing
+[aist#0:0/mp3 @ 00000227917e5380] [dec:mp3float @ 00000227917e6c40] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 00000227917e7200] Header missing
+[aist#0:0/mp3 @ 00000227917e5380] [dec:mp3float @ 00000227917e6c40] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 00000227917e7200] Header missing
+[aist#0:0/mp3 @ 00000227917e5380] [dec:mp3float @ 00000227917e6c40] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 00000227917e7200] Header missing
+[aist#0:0/mp3 @ 00000227917e5380] [dec:mp3float @ 00000227917e6c40] Error submitting packet to decoder: Invalid data found when processing input
+
+[Header missing] Week37\06370094 Omaha - You Came Into My Life (Narcotic Thrust Radio Edit).mp3
+    [mp3float @ 0000022ffe1c7300] Header missing
+[aist#0:0/mp3 @ 0000022ffe1c5480] [dec:mp3float @ 0000022ffe1c6d80] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 0000022ffe1c7300] Header missing
+[aist#0:0/mp3 @ 0000022ffe1c5480] [dec:mp3float @ 0000022ffe1c6d80] Error submitting packet to decoder: Invalid data found when processing input
+
+[Header missing] Week38\06380012-A Nick & Simon - Vaarwel Verleden.mp3
+    [mp3float @ 00000275706a7180] Header missing
+[aist#0:0/mp3 @ 00000275706a5340] [dec:mp3float @ 00000275706a6c00] Error submitting packet to decoder: Invalid data found when processing input
+
+[Header missing] Week40\06400087 Van Velzen - Baby Get Higher.mp3
+    [mp3float @ 0000022b71434100] Header missing
+[aist#0:0/mp3 @ 0000022b71424d00] [dec:mp3float @ 0000022b7142b580] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 0000022b71434100] Header missing
+[aist#0:0/mp3 @ 0000022b71424d00] [dec:mp3float @ 0000022b7142b580] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 0000022b71434100] Header missing
+[aist#0:0/mp3 @ 0000022b71424d00] [dec:mp3float @ 0000022b7142b580] Error submitting packet to decoder: Invalid data found when processing input
+[mp3float @ 0000022b71434100] Header missing
+[aist#0:0/mp3 @ 0000022b71424d00] [dec:mp3float @ 0000022b7142b580] Error submitting packet to decoder: Invalid data found when processing input
+
+[Invalid data] Week49\06490097 I.O.S - Meer Van Jou.mp3
+    [aist#0:0/mp3 @ 0000022a93bf50c0] [dec:mp3float @ 0000022a93bf69c0] Error submitting packet to decoder: Invalid data found when processing input
+
