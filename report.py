@@ -6,6 +6,7 @@ from database import verkrijg_rar_inventory_overzicht
 from database import verkrijg_recovery_items
 from database import verkrijg_recovery_overzicht
 from identity import verkrijg_identiteit_overzicht
+from spotify_recovery import verkrijg_spotify_recovery_overzicht
 
 
 def maak_rapport(map_pad, database):
@@ -28,6 +29,7 @@ def maak_rapport(map_pad, database):
     recovery_overzicht = verkrijg_recovery_overzicht(database)
     recovery_items = verkrijg_recovery_items(database)
     identiteit_overzicht = verkrijg_identiteit_overzicht(database)
+    spotify_recovery = verkrijg_spotify_recovery_overzicht(database)
 
     for gegevens in database.values():
 
@@ -154,6 +156,46 @@ def maak_rapport(map_pad, database):
                     f"{item['verwacht_rel_pad']} | "
                     f"{reden}\n"
                 )
+        f.write("\n")
+
+        f.write("Spotify recovery\n")
+        f.write("------------------------------\n")
+        f.write(f"Geschikt             : {spotify_recovery['geschikt']}\n")
+        f.write(f"Gevonden             : {spotify_recovery['gevonden']}\n")
+        f.write(f"Ambiguous            : {spotify_recovery['ambiguous']}\n")
+        f.write(
+            f"Niet gevonden        : {spotify_recovery['niet_gevonden']}\n"
+        )
+        f.write(f"Fouten               : {spotify_recovery['fouten']}\n")
+        f.write(
+            f"Onvoldoende identiteit: "
+            f"{spotify_recovery['onvoldoende_identiteit']}\n"
+        )
+        f.write(
+            f"Playlist-tracks      : "
+            f"{spotify_recovery['playlist_tracks']}\n\n"
+        )
+
+        ambiguous_items = database.verbinding.execute(
+            """
+            SELECT r.id, r.bepaalde_artiest, r.bepaalde_titel,
+                   p.gevonden_artiest, p.gevonden_titel, p.matchscore
+            FROM recovery_provider_resultaten p
+            JOIN recovery_items r ON r.id = p.recovery_item_id
+            WHERE p.provider = 'spotify'
+              AND p.resultaat_type = 'ambiguous'
+            ORDER BY r.id
+            """
+        )
+        for item in ambiguous_items:
+            f.write(
+                f"Ambiguous ID {item['id']}: "
+                f"{item['bepaalde_artiest']} - "
+                f"{item['bepaalde_titel']} => "
+                f"{item['gevonden_artiest']} - "
+                f"{item['gevonden_titel']} "
+                f"({item['matchscore']:.4f})\n"
+            )
         f.write("\n")
 
         if nul_bytes:
