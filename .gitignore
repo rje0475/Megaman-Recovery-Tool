@@ -15,6 +15,9 @@ venv/
 # Rapporten
 reports/
 
+# Demo-praktijktest
+demo_runs/
+
 # Windows
 Thumbs.db
 Desktop.ini
