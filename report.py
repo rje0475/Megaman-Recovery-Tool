@@ -3,6 +3,8 @@ from datetime import datetime
 
 from database import verkrijg_ontbrekende_rar_items
 from database import verkrijg_rar_inventory_overzicht
+from database import verkrijg_recovery_items
+from database import verkrijg_recovery_overzicht
 
 
 def maak_rapport(map_pad, database):
@@ -22,6 +24,8 @@ def maak_rapport(map_pad, database):
     ffmpeg_fouten = []
     rar_overzicht = verkrijg_rar_inventory_overzicht(database)
     ontbrekende_rar_items = verkrijg_ontbrekende_rar_items(database)
+    recovery_overzicht = verkrijg_recovery_overzicht(database)
+    recovery_items = verkrijg_recovery_items(database)
 
     for gegevens in database.values():
 
@@ -95,6 +99,27 @@ def maak_rapport(map_pad, database):
                 f.write(f"Pad     : {item['verwacht_rel_pad']}\n")
                 f.write(f"Grootte : {grootte}\n")
                 f.write(f"CRC     : {crc}\n\n")
+
+        f.write("Recovery-items\n")
+        f.write("------------------------------\n")
+        f.write(f"Totaal             : {recovery_overzicht['totaal']}\n")
+        f.write(
+            f"Ontbreekt          : {recovery_overzicht['ontbreekt']}\n"
+        )
+        f.write(f"Corrupt            : {recovery_overzicht['corrupt']}\n")
+        f.write(
+            f"Nul bytes          : {recovery_overzicht['nul_bytes']}\n"
+        )
+        f.write(
+            f"Grootteafwijking   : "
+            f"{recovery_overzicht['grootte_afwijking']}\n"
+        )
+        f.write(f"RAR CRC            : {recovery_overzicht['rar_crc']}\n\n")
+
+        for item in recovery_items:
+            f.write(f"RAR-set      : {item['rar_set_key']}\n")
+            f.write(f"Relatief pad : {item['verwacht_rel_pad']}\n")
+            f.write(f"Probleemtype : {item['probleem_type']}\n\n")
 
         if nul_bytes:
 

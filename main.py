@@ -5,6 +5,7 @@ from report import maak_rapport
 from rar import zoek_part01_bestanden
 from rar import test_rar
 from rar_inventory import voer_rar_inventory_uit
+from recovery import genereer_recovery_items
 from scanner import controleer_mp3_bestanden
 from scanner import zoek_mp3_bestanden
 from spotify import voer_spotify_scan_uit
@@ -91,6 +92,12 @@ part01_bestanden = zoek_part01_bestanden(rar_map)
 
 for rar in part01_bestanden:
     test_rar(rar, database)
+
+# --------------------------------------------------
+# Recovery-items
+# --------------------------------------------------
+
+genereer_recovery_items(database)
 
 # --------------------------------------------------
 # Tellingen
