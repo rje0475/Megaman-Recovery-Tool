@@ -209,11 +209,14 @@ class SpotifyClient:
         artiest = artiest.strip()
         titel = titel.strip()
 
-        if not artiest or not titel:
-            raise ValueError("Artiest en titel mogen niet leeg zijn.")
+        if not titel:
+            raise ValueError("Titel mag niet leeg zijn.")
 
         parameters = {
-            "q": f"track:{titel} artist:{artiest}",
+            "q": (
+                f"track:{titel} artist:{artiest}"
+                if artiest else f"track:{titel}"
+            ),
             "type": "track",
             "limit": max(1, min(int(limiet), 50))
         }

@@ -319,6 +319,70 @@ class SQLiteDatabase:
             )
             """
         )
+        self.verbinding.execute(
+            """
+            CREATE TABLE IF NOT EXISTS spotify_smart_results (
+                recovery_item_id INTEGER PRIMARY KEY,
+                local_path TEXT NOT NULL,
+                original_artist TEXT,
+                original_title TEXT,
+                cleaned_artist TEXT,
+                cleaned_full_title TEXT,
+                base_title TEXT,
+                local_version TEXT,
+                local_remixer TEXT,
+                search_strategy TEXT,
+                search_query TEXT,
+                spotify_track_id TEXT,
+                spotify_url TEXT,
+                found_artist TEXT,
+                found_title TEXT,
+                found_base_title TEXT,
+                found_version TEXT,
+                found_remixer TEXT,
+                album TEXT,
+                duration_ms INTEGER,
+                match_score REAL,
+                status TEXT NOT NULL,
+                checked_at TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                manually_reviewed INTEGER NOT NULL DEFAULT 0,
+                FOREIGN KEY (recovery_item_id) REFERENCES recovery_items(id)
+                    ON DELETE CASCADE
+            )
+            """
+        )
+        self.verbinding.execute(
+            """
+            CREATE TABLE IF NOT EXISTS spotify_candidates (
+                id INTEGER PRIMARY KEY,
+                recovery_item_id INTEGER NOT NULL,
+                spotify_track_id TEXT NOT NULL,
+                spotify_url TEXT,
+                artist TEXT,
+                title TEXT,
+                base_title TEXT,
+                version TEXT,
+                remixer TEXT,
+                album TEXT,
+                duration_ms INTEGER,
+                total_score REAL NOT NULL,
+                artist_score REAL NOT NULL,
+                title_score REAL NOT NULL,
+                version_score REAL NOT NULL,
+                duration_score REAL NOT NULL,
+                rank_number INTEGER,
+                search_strategy TEXT NOT NULL,
+                search_query TEXT NOT NULL,
+                selected INTEGER NOT NULL DEFAULT 0,
+                rejected INTEGER NOT NULL DEFAULT 0,
+                score_reason TEXT NOT NULL,
+                FOREIGN KEY (recovery_item_id) REFERENCES recovery_items(id)
+                    ON DELETE CASCADE,
+                UNIQUE (recovery_item_id, spotify_track_id)
+            )
+            """
+        )
         kolommen = {
             rij["name"]
             for rij in self.verbinding.execute(

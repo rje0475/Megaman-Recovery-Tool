@@ -20,6 +20,8 @@ class CliTest(unittest.TestCase):
         self.assertIn("--analyze", uitvoer.getvalue())
         self.assertIn("--extract", uitvoer.getvalue())
         self.assertIn("--repair", uitvoer.getvalue())
+        self.assertIn("--spotify-search", uitvoer.getvalue())
+        self.assertIn("--spotify-retry", uitvoer.getvalue())
         self.assertIn("Voorbeelden:", uitvoer.getvalue())
         self.assertIn("zonder bestanden te repareren", uitvoer.getvalue())
 
@@ -178,6 +180,43 @@ class CliTest(unittest.TestCase):
             "unrecognized arguments: --repair-workflow map",
             fouten.getvalue(),
         )
+
+    def test_spotify_opties_accepteren_exact_een_map(self):
+        overzicht = Mock(fouten=0)
+        for optie, retry in (
+            ("--spotify-search", False), ("--spotify-retry", True)
+        ):
+            with self.subTest(optie=optie):
+                with patch(
+                    "spotify_smart.voer_spotify_smart_uit",
+                    return_value=overzicht,
+                ) as zoeken:
+                    code = cli.main(
+                        [optie, "."], uitvoer=io.StringIO()
+                    )
+                self.assertEqual(code, 0)
+                zoeken.assert_called_once_with(
+                    Path("."), retry=retry, uitvoer=unittest.mock.ANY
+                )
+                fouten = io.StringIO()
+                with contextlib.redirect_stderr(fouten):
+                    with self.assertRaises(SystemExit):
+                        cli.main([optie], uitvoer=io.StringIO())
+                with contextlib.redirect_stderr(io.StringIO()):
+                    with self.assertRaises(SystemExit):
+                        cli.main(
+                            [optie, ".", "extra"], uitvoer=io.StringIO()
+                        )
+
+    def test_spotify_niet_bestaande_map_geeft_geen_traceback(self):
+        uitvoer = io.StringIO()
+        code = cli.main(
+            ["--spotify-search", r"Z:\bestaat\beslist\niet"],
+            uitvoer=uitvoer,
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("Spotify-map bestaat niet", uitvoer.getvalue())
+        self.assertNotIn("Traceback", uitvoer.getvalue())
 
     def test_ontbrekende_repair_tool_crasht_cli_niet(self):
         with patch(
