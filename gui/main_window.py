@@ -2,9 +2,11 @@
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QTextCursor
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QDesktopServices, QTextCursor
 from PySide6.QtWidgets import (
+    QComboBox,
+    QDialog,
     QFileDialog,
     QGridLayout,
     QHBoxLayout,
@@ -15,6 +17,8 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -24,6 +28,11 @@ from database import DATABASE_BESTAND, SQLiteDatabase
 from rar_extractor import voer_extractie_uit
 
 from gui.workers import ActionWorker
+from spotify_smart import (
+    kies_kandidaat,
+    markeer_geen_kandidaat,
+    voer_spotify_smart_uit,
+)
 
 
 STATISTIEKEN = (
@@ -146,6 +155,7 @@ class MegamanMainWindow(QMainWindow):
             statistieken.addWidget(waarde, index // 3, 2 * (index % 3) + 1)
             self.statistiek_labels[sleutel] = waarde
         layout.addLayout(statistieken)
+        self._bouw_spotify(layout)
 
         self.voortgang = QProgressBar()
         self.voortgang.setRange(0, 100)
@@ -156,6 +166,63 @@ class MegamanMainWindow(QMainWindow):
         self.logvenster.setReadOnly(True)
         layout.addWidget(self.logvenster, stretch=1)
         self.setCentralWidget(centraal)
+
+    def _bouw_spotify(self, layout):
+        layout.addWidget(QLabel("Spotify-kandidaten"))
+        rij = QHBoxLayout()
+        self.spotify_filter = QComboBox()
+        self.spotify_filter.addItems([
+            "Alles", "FOUND", "AMBIGUOUS", "NOT_FOUND",
+            "INSUFFICIENT_IDENTITY", "MANUAL", "REVIEWED_NONE",
+        ])
+        self.spotify_zoeken_knop = QPushButton("Spotify zoeken")
+        self.spotify_retry_knop = QPushButton(
+            "Mislukte resultaten opnieuw proberen"
+        )
+        self.kandidaten_knop = QPushButton("Kandidaten bekijken")
+        self.spotify_openen_knop = QPushButton(
+            "Gekozen resultaat openen in Spotify"
+        )
+        self.geen_kandidaat_knop = QPushButton(
+            "Markeren als geen juiste kandidaat"
+        )
+        for widget in (
+            self.spotify_filter, self.spotify_zoeken_knop,
+            self.spotify_retry_knop, self.kandidaten_knop,
+            self.spotify_openen_knop, self.geen_kandidaat_knop,
+        ):
+            rij.addWidget(widget)
+        layout.addLayout(rij)
+        self.spotify_tabel = QTableWidget(0, 9)
+        self.spotify_tabel.setHorizontalHeaderLabels([
+            "Lokaal bestand", "Oorspronkelijke artiest",
+            "Oorspronkelijke titel", "Lokale versie",
+            "Spotify-artiest", "Spotify-titel", "Spotify-versie",
+            "Score", "Status",
+        ])
+        layout.addWidget(self.spotify_tabel)
+        self.spotify_statistieken = QLabel(
+            "Te beoordelen: 0 | FOUND: 0 | AMBIGUOUS: 0 | NOT_FOUND: 0 | "
+            "INSUFFICIENT_IDENTITY: 0 | MANUAL: 0 | REVIEWED_NONE: 0"
+        )
+        layout.addWidget(self.spotify_statistieken)
+        self.actieknoppen += (
+            self.spotify_zoeken_knop, self.spotify_retry_knop,
+            self.kandidaten_knop, self.spotify_openen_knop,
+            self.geen_kandidaat_knop,
+        )
+        self.spotify_filter.currentTextChanged.connect(
+            lambda _: self.vernieuw_spotify()
+        )
+        self.spotify_zoeken_knop.clicked.connect(
+            lambda: self._spotify_zoek(False)
+        )
+        self.spotify_retry_knop.clicked.connect(
+            lambda: self._spotify_zoek(True)
+        )
+        self.kandidaten_knop.clicked.connect(self._toon_kandidaten)
+        self.spotify_openen_knop.clicked.connect(self._open_spotify)
+        self.geen_kandidaat_knop.clicked.connect(self._geen_kandidaat)
 
     def _bladeren(self):
         map_pad = QFileDialog.getExistingDirectory(
@@ -239,6 +306,7 @@ class MegamanMainWindow(QMainWindow):
     def _actie_afgerond(self):
         self._zet_actief(True)
         self.vernieuw_statistieken()
+        self.vernieuw_spotify()
 
     def _zet_actief(self, actief):
         self.bladeren_knop.setEnabled(actief)
@@ -256,3 +324,196 @@ class MegamanMainWindow(QMainWindow):
             waarden = {}
         for sleutel, label in self.statistiek_labels.items():
             label.setText(str(waarden.get(sleutel, 0)))
+        self.vernieuw_spotify()
+
+    def _spotify_zoek(self, retry):
+        map_pad = self._geldige_map()
+        if map_pad:
+            def actie(geselecteerde_map, uitvoer=None):
+                return voer_spotify_smart_uit(
+                    geselecteerde_map, retry=retry, uitvoer=uitvoer
+                )
+            self._start_actie(
+                "Spotify opnieuw proberen" if retry else "Spotify zoeken",
+                actie, map_pad,
+            )
+
+    def vernieuw_spotify(self):
+        self.spotify_tabel.setRowCount(0)
+        if not Path(DATABASE_BESTAND).is_file():
+            return
+        database = SQLiteDatabase(DATABASE_BESTAND)
+        try:
+            filter_ = self.spotify_filter.currentText()
+            rijen = database.verbinding.execute(
+                """
+                SELECT * FROM spotify_smart_results
+                WHERE ?='Alles' OR status=?
+                ORDER BY recovery_item_id
+                """, (filter_, filter_)
+            ).fetchall()
+            for rij in rijen:
+                index = self.spotify_tabel.rowCount()
+                self.spotify_tabel.insertRow(index)
+                waarden = (
+                    rij["local_path"], rij["original_artist"],
+                    rij["original_title"], rij["local_version"],
+                    rij["found_artist"], rij["found_title"],
+                    rij["found_version"], rij["match_score"], rij["status"],
+                )
+                for kolom, waarde in enumerate(waarden):
+                    item = QTableWidgetItem(
+                        "" if waarde is None else str(waarde)
+                    )
+                    item.setData(
+                        Qt.ItemDataRole.UserRole, rij["recovery_item_id"]
+                    )
+                    self.spotify_tabel.setItem(index, kolom, item)
+            telling = {
+                rij["status"]: rij["aantal"]
+                for rij in database.verbinding.execute(
+                    """
+                    SELECT status, COUNT(*) aantal
+                    FROM spotify_smart_results GROUP BY status
+                    """
+                )
+            }
+            totaal = sum(telling.values())
+            self.spotify_statistieken.setText(
+                f"Te beoordelen: {totaal} | FOUND: {telling.get('FOUND', 0)} "
+                f"| AMBIGUOUS: {telling.get('AMBIGUOUS', 0)} | NOT_FOUND: "
+                f"{telling.get('NOT_FOUND', 0)} | INSUFFICIENT_IDENTITY: "
+                f"{telling.get('INSUFFICIENT_IDENTITY', 0)} | MANUAL: "
+                f"{telling.get('MANUAL', 0)} | REVIEWED_NONE: "
+                f"{telling.get('REVIEWED_NONE', 0)}"
+            )
+        finally:
+            database.sluit()
+
+    def _geselecteerd_item_id(self):
+        rij = self.spotify_tabel.currentRow()
+        if rij < 0 or self.spotify_tabel.item(rij, 0) is None:
+            QMessageBox.warning(self, "Geen selectie", "Selecteer eerst een item.")
+            return None
+        return self.spotify_tabel.item(rij, 0).data(Qt.ItemDataRole.UserRole)
+
+    def _toon_kandidaten(self):
+        item_id = self._geselecteerd_item_id()
+        if item_id is not None:
+            SpotifyKandidatenDialoog(item_id, self).exec()
+            self.vernieuw_spotify()
+
+    def _geen_kandidaat(self):
+        item_id = self._geselecteerd_item_id()
+        if item_id is None:
+            return
+        database = SQLiteDatabase(DATABASE_BESTAND)
+        try:
+            markeer_geen_kandidaat(database, item_id)
+        finally:
+            database.sluit()
+        self.vernieuw_spotify()
+
+    def _open_spotify(self):
+        item_id = self._geselecteerd_item_id()
+        if item_id is None:
+            return
+        database = SQLiteDatabase(DATABASE_BESTAND)
+        try:
+            rij = database.verbinding.execute(
+                """
+                SELECT spotify_url FROM spotify_smart_results
+                WHERE recovery_item_id=?
+                """, (item_id,)
+            ).fetchone()
+        finally:
+            database.sluit()
+        url = rij["spotify_url"] if rij else None
+        if not url or not url.startswith("https://open.spotify.com/track/"):
+            QMessageBox.warning(self, "Ongeldige URL", "Geen geldige Spotify-URL.")
+            return
+        QDesktopServices.openUrl(QUrl(url))
+
+
+class SpotifyKandidatenDialoog(QDialog):
+    def __init__(self, recovery_item_id, parent=None):
+        super().__init__(parent)
+        self.recovery_item_id = recovery_item_id
+        self.setWindowTitle("Spotify-kandidaten")
+        layout = QVBoxLayout(self)
+        self.tabel = QTableWidget(0, 10)
+        self.tabel.setHorizontalHeaderLabels([
+            "Rang", "Artiest", "Titel", "Album", "Duur", "Versie",
+            "Remixer", "Score", "Reden", "Spotify-link",
+        ])
+        layout.addWidget(self.tabel)
+        knoppen = QHBoxLayout()
+        for tekst, methode in (
+            ("Deze versie kiezen", self._kies),
+            ("Openen in Spotify", self._open),
+            ("Geen van deze", self._geen),
+            ("Later beoordelen", self.reject),
+        ):
+            knop = QPushButton(tekst)
+            knop.clicked.connect(methode)
+            knoppen.addWidget(knop)
+        layout.addLayout(knoppen)
+        self._laad()
+
+    def _laad(self):
+        database = SQLiteDatabase(DATABASE_BESTAND)
+        try:
+            rijen = database.verbinding.execute(
+                """
+                SELECT * FROM spotify_candidates
+                WHERE recovery_item_id=? ORDER BY rank_number
+                """, (self.recovery_item_id,)
+            ).fetchall()
+        finally:
+            database.sluit()
+        for rij in rijen:
+            index = self.tabel.rowCount()
+            self.tabel.insertRow(index)
+            waarden = (
+                rij["rank_number"], rij["artist"], rij["title"], rij["album"],
+                rij["duration_ms"], rij["version"], rij["remixer"],
+                rij["total_score"], rij["score_reason"], rij["spotify_url"],
+            )
+            for kolom, waarde in enumerate(waarden):
+                item = QTableWidgetItem("" if waarde is None else str(waarde))
+                item.setData(Qt.ItemDataRole.UserRole, rij["id"])
+                self.tabel.setItem(index, kolom, item)
+
+    def _huidige_id(self):
+        rij = self.tabel.currentRow()
+        return (
+            self.tabel.item(rij, 0).data(Qt.ItemDataRole.UserRole)
+            if rij >= 0 and self.tabel.item(rij, 0) else None
+        )
+
+    def _kies(self):
+        kandidaat_id = self._huidige_id()
+        if kandidaat_id is None:
+            return
+        database = SQLiteDatabase(DATABASE_BESTAND)
+        try:
+            kies_kandidaat(database, self.recovery_item_id, kandidaat_id)
+        finally:
+            database.sluit()
+        self.accept()
+
+    def _geen(self):
+        database = SQLiteDatabase(DATABASE_BESTAND)
+        try:
+            markeer_geen_kandidaat(database, self.recovery_item_id)
+        finally:
+            database.sluit()
+        self.accept()
+
+    def _open(self):
+        rij = self.tabel.currentRow()
+        url = self.tabel.item(rij, 9).text() if rij >= 0 else ""
+        if url.startswith("https://open.spotify.com/track/"):
+            QDesktopServices.openUrl(QUrl(url))
+        else:
+            QMessageBox.warning(self, "Ongeldige URL", "Geen geldige Spotify-URL.")

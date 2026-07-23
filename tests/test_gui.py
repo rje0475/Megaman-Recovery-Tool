@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QMessageBox, QPushButton
 
 import cli
 from gui import GuiDependencyFout
@@ -38,6 +38,8 @@ class CliGuiTest(unittest.TestCase):
             ["--extract", "."],
             ["--demo"],
             ["--report"],
+            ["--spotify-search", "."],
+            ["--spotify-retry", "."],
         ):
             with self.subTest(actie=actie):
                 fouten = io.StringIO()
@@ -200,6 +202,21 @@ class MainWindowTest(unittest.TestCase):
         self.assertEqual(toestanden, [True, True])
         self.assertEqual(self.venster.voortgang.value(), 50)
         self.assertIn("bezig", self.venster.logvenster.toPlainText())
+
+    def test_spotify_gedeelte_bevat_filters_en_geen_youtube(self):
+        filters = [
+            self.venster.spotify_filter.itemText(index)
+            for index in range(self.venster.spotify_filter.count())
+        ]
+        self.assertEqual(filters, [
+            "Alles", "FOUND", "AMBIGUOUS", "NOT_FOUND",
+            "INSUFFICIENT_IDENTITY", "MANUAL", "REVIEWED_NONE",
+        ])
+        teksten = " ".join(
+            knop.text() for knop in self.venster.findChildren(QPushButton)
+        )
+        self.assertIn("Spotify zoeken", teksten)
+        self.assertNotIn("YouTube", teksten)
 
 
 if __name__ == "__main__":

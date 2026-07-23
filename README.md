@@ -160,3 +160,38 @@ De GUI biedt vier expliciete acties:
 Repareren kan bronbestanden wijzigen of aanmaken. Uitpakken maakt bestanden
 aan in de extractiedoelmap. Daarom vraagt de GUI voor beide acties altijd om
 bevestiging; analyse start nooit automatisch een reparatie of extractie.
+
+# Slim zoeken en Spotify-versies
+
+Stel uitsluitend lokaal de officiële Spotify API-credentials in:
+
+```powershell
+$env:SPOTIFY_CLIENT_ID="..."
+$env:SPOTIFY_CLIENT_SECRET="..."
+```
+
+Zoek nieuwe of nog niet definitief beoordeelde recovery-items met:
+
+```powershell
+python main.py --spotify-search "C:\pad\naar\downloadmap"
+python main.py --spotify-retry "C:\pad\naar\downloadmap"
+```
+
+De eerste opdracht probeert originele metadata, opgeschoonde metadata,
+bestandsnamen, basistitels en versie-informatie. De retry verwerkt uitsluitend
+`NOT_FOUND` en `AMBIGUOUS`. Kandidaten worden ontdubbeld, gerangschikt en met
+hun scoringsonderdelen lokaal in SQLite opgeslagen.
+
+- `FOUND`: één overtuigende kandidaat met passende versie.
+- `AMBIGUOUS`: meerdere tracks of officiële versies zijn aannemelijk.
+- `NOT_FOUND`: geen kandidaat haalt de minimumscore.
+- `INSUFFICIENT_IDENTITY`: artiest/titel zijn onvoldoende betrouwbaar.
+- `MANUAL`: de gebruiker heeft een kandidaat gekozen.
+- `REVIEWED_NONE`: de gebruiker heeft alle kandidaten afgewezen.
+
+Radio Edit, Extended Mix, Original Mix en specifieke remixers worden apart
+herkend en wegen zwaar in de score. Handmatige keuzes worden nooit automatisch
+overschreven. De tool gebruikt bewust geen YouTube: benamingen en versies zijn
+daarvoor onvoldoende betrouwbaar. Spotify-kandidaten, scores, zoekopdrachten
+en keuzes blijven lokaal in SQLite; credentials worden niet opgeslagen of
+gelogd. Deze workflow wijzigt geen MP3-bestanden.

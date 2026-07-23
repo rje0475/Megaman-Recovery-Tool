@@ -6,6 +6,7 @@ from analyse import AnalyseFout, voer_analyse
 from database import DATABASE_BESTAND
 from par2_repair import Par2RepairFout
 from rar_extractor import ExtractieFout
+from spotify_smart import SpotifyZoekFout
 
 
 BANNER = (
@@ -29,6 +30,8 @@ def maak_parser():
             "  python main.py --gui\n"
             "  python main.py --analyze \"C:\\pad\\naar\\map\"\n"
             "  python main.py --repair \"C:\\pad\\naar\\map\"\n"
+            "  python main.py --spotify-search \"C:\\pad\\naar\\map\"\n"
+            "  python main.py --spotify-retry \"C:\\pad\\naar\\map\"\n"
             "  python main.py --extract \"C:\\pad\\naar\\downloadmap\"\n"
             "  python main.py --demo\n"
             "  python main.py --report"
@@ -36,6 +39,16 @@ def maak_parser():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     acties = parser.add_mutually_exclusive_group()
+    acties.add_argument(
+        "--spotify-search",
+        metavar="MAP",
+        help="zoek en beoordeel Spotify-kandidaten voor open recovery-items",
+    )
+    acties.add_argument(
+        "--spotify-retry",
+        metavar="MAP",
+        help="zoek uitsluitend NOT_FOUND- en AMBIGUOUS-items opnieuw",
+    )
     acties.add_argument(
         "--gui",
         action="store_true",
@@ -134,6 +147,14 @@ def main(argv=None, invoer=input, uitvoer=None):
             return 0
         if args.report:
             return toon_laatste_rapport(uitvoer=uitvoer)
+        if args.spotify_search or args.spotify_retry:
+            from spotify_smart import voer_spotify_smart_uit
+            overzicht = voer_spotify_smart_uit(
+                Path((args.spotify_search or args.spotify_retry).strip('"')),
+                retry=bool(args.spotify_retry),
+                uitvoer=uitvoer,
+            )
+            return 1 if overzicht.fouten else 0
         if args.repair:
             from par2_repair import voer_par2_reparatie_uit
             overzicht = voer_par2_reparatie_uit(
@@ -156,7 +177,8 @@ def main(argv=None, invoer=input, uitvoer=None):
         invoer("\nDruk op Enter om af te sluiten...")
         return 0
     except (
-        AnalyseFout, ExtractieFout, Par2RepairFout, OSError, ValueError
+        AnalyseFout, ExtractieFout, Par2RepairFout, SpotifyZoekFout,
+        OSError, ValueError
     ) as fout:
         uitvoer.write(f"FOUT: {fout}\n")
         return 1
