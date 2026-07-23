@@ -74,16 +74,23 @@ class SQLiteDatabase:
 
     def nieuwe_scan(self):
         """
-        Begin met een lege scanset, zoals de eerdere dictionary.
+        Markeer eerdere MP3's als inactief en behoud providerresultaten.
         """
 
-        self.verbinding.execute("DELETE FROM provider_resultaten")
-        self.verbinding.execute("DELETE FROM mp3_bestanden")
+        self.verbinding.execute(
+            "UPDATE mp3_bestanden SET bestaat = ?",
+            (False,)
+        )
         self.verbinding.commit()
 
     def __len__(self):
         rij = self.verbinding.execute(
-            "SELECT COUNT(*) AS aantal FROM mp3_bestanden"
+            """
+            SELECT COUNT(*) AS aantal
+            FROM mp3_bestanden
+            WHERE bestaat = ?
+            """,
+            (True,)
         ).fetchone()
         return rij["aantal"]
 
@@ -92,23 +99,33 @@ class SQLiteDatabase:
             """
             SELECT 1
             FROM mp3_bestanden
-            WHERE relatief_pad = ?
+            WHERE relatief_pad = ? AND bestaat = ?
             LIMIT 1
             """,
-            (relatief_pad,)
+            (relatief_pad, True)
         ).fetchone()
         return rij is not None
 
     def values(self):
         rijen = self.verbinding.execute(
-            "SELECT * FROM mp3_bestanden ORDER BY rowid"
+            """
+            SELECT *
+            FROM mp3_bestanden
+            WHERE bestaat = ?
+            ORDER BY rowid
+            """,
+            (True,)
         ).fetchall()
         return [self._naar_dict(rij) for rij in rijen]
 
     def get(self, relatief_pad, standaard=None):
         rij = self.verbinding.execute(
-            "SELECT * FROM mp3_bestanden WHERE relatief_pad = ?",
-            (relatief_pad,)
+            """
+            SELECT *
+            FROM mp3_bestanden
+            WHERE relatief_pad = ? AND bestaat = ?
+            """,
+            (relatief_pad, True)
         ).fetchone()
 
         if rij is None:
@@ -157,7 +174,7 @@ def voeg_mp3_toe(database, basis_map, bestand):
 
     database.verbinding.execute(
         """
-        INSERT OR IGNORE INTO mp3_bestanden (
+        INSERT INTO mp3_bestanden (
             relatief_pad,
             bestand,
             bestaat,
@@ -169,6 +186,15 @@ def voeg_mp3_toe(database, basis_map, bestand):
             ffmpeg_melding
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (relatief_pad) DO UPDATE SET
+            bestand = excluded.bestand,
+            bestaat = excluded.bestaat,
+            nul_bytes = excluded.nul_bytes,
+            rar_status = excluded.rar_status,
+            rar_type = excluded.rar_type,
+            ffmpeg_status = excluded.ffmpeg_status,
+            ffmpeg_type = excluded.ffmpeg_type,
+            ffmpeg_melding = excluded.ffmpeg_melding
         """,
         (
             relatief_pad,

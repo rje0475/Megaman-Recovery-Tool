@@ -1,18 +1,25 @@
+import io
+import os
 import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from database import (
     SQLiteDatabase,
+    bewaar_provider_resultaat,
     voeg_mp3_toe,
     maak_database,
     verkrijg_provider_resultaat,
+    zet_nul_bytes,
 )
 from spotify import (
     MuziekResultaat,
+    SpotifyApiFout,
     schoon_mp3_bestandsnaam,
     schoon_spotify_zoekwaarden,
+    voer_spotify_scan_uit,
     zoek_en_bewaar_spotify_nummer,
 )
 
@@ -24,7 +31,12 @@ class NepSpotifyClient:
 
     def zoek_nummer(self, artiest, titel):
         self.aanroepen.append((artiest, titel))
-        return self.resultaten.pop(0)
+        resultaat = self.resultaten.pop(0)
+
+        if isinstance(resultaat, Exception):
+            raise resultaat
+
+        return resultaat
 
 
 def resultaat(zoek_artiest, zoek_titel, gevonden):
@@ -298,6 +310,161 @@ class DatabaseMigratieTest(unittest.TestCase):
                 )
             finally:
                 database.sluit()
+
+
+class SpotifyScanFlowTest(unittest.TestCase):
+    def setUp(self):
+        self.tijdelijke_map = tempfile.TemporaryDirectory()
+        self.root = Path(self.tijdelijke_map.name)
+        self.databasepad = self.root / "test.sqlite3"
+        self.muziek_map = self.root / "muziek"
+
+    def tearDown(self):
+        self.tijdelijke_map.cleanup()
+
+    def test_hervat_en_slaat_nul_byte_over(self):
+        database = maak_database(self.databasepad)
+        eerder_bestand = self.muziek_map / "Artiest A - Titel A.mp3"
+        voeg_mp3_toe(
+            database,
+            self.muziek_map,
+            eerder_bestand,
+        )
+        bewaar_provider_resultaat(
+            database,
+            "Artiest A - Titel A.mp3",
+            "spotify",
+            "Artiest A",
+            "Titel A",
+            True,
+            track_id="eerder-track-id",
+            zoekmethode="original",
+        )
+        database.sluit()
+
+        database = maak_database(self.databasepad)
+        nieuw_bestand = self.muziek_map / "Artiest B - Titel B.mp3"
+        nul_bestand = self.muziek_map / "Artiest C - Titel C.mp3"
+
+        for bestand in (
+            eerder_bestand,
+            nieuw_bestand,
+            nul_bestand,
+        ):
+            voeg_mp3_toe(
+                database,
+                self.muziek_map,
+                bestand,
+            )
+
+        zet_nul_bytes(
+            database,
+            self.muziek_map,
+            nul_bestand,
+        )
+
+        client = NepSpotifyClient([
+            resultaat("Artiest B", "Titel B", True),
+        ])
+        uitvoer = io.StringIO()
+
+        try:
+            scan = voer_spotify_scan_uit(
+                database,
+                client=client,
+                uitvoer=uitvoer,
+            )
+
+            self.assertEqual(
+                client.aanroepen,
+                [("Artiest B", "Titel B")],
+            )
+            self.assertEqual(scan.totaal, 1)
+            self.assertEqual(scan.verwerkt, 1)
+            self.assertEqual(scan.gevonden, 1)
+            self.assertEqual(scan.niet_gevonden, 0)
+            self.assertEqual(scan.fouten, 0)
+            self.assertEqual(scan.overgeslagen, 1)
+            self.assertIn(
+                "Spotify: 1/1 | gevonden: 1 | "
+                "niet gevonden: 0 | fouten: 0",
+                uitvoer.getvalue(),
+            )
+            self.assertTrue(uitvoer.getvalue().endswith("\n"))
+        finally:
+            database.sluit()
+
+    def test_ontbrekende_credentials_slaan_stap_over(self):
+        database = maak_database(self.databasepad)
+        uitvoer = io.StringIO()
+
+        try:
+            with patch.dict(os.environ, {}, clear=True):
+                scan = voer_spotify_scan_uit(
+                    database,
+                    uitvoer=uitvoer,
+                )
+
+            self.assertTrue(scan.credentials_ontbreken)
+            self.assertEqual(scan.verwerkt, 0)
+            self.assertIn(
+                "Spotify overgeslagen",
+                uitvoer.getvalue(),
+            )
+            self.assertIn(
+                "SPOTIFY_CLIENT_ID",
+                uitvoer.getvalue(),
+            )
+            self.assertIn(
+                "SPOTIFY_CLIENT_SECRET",
+                uitvoer.getvalue(),
+            )
+        finally:
+            database.sluit()
+
+    def test_api_fout_stopt_volgende_nummer_niet(self):
+        database = maak_database(self.databasepad)
+        eerste = self.muziek_map / "Artiest A - Titel A.mp3"
+        tweede = self.muziek_map / "Artiest B - Titel B.mp3"
+
+        for bestand in (eerste, tweede):
+            voeg_mp3_toe(
+                database,
+                self.muziek_map,
+                bestand,
+            )
+
+        client = NepSpotifyClient([
+            SpotifyApiFout("tijdelijke fout"),
+            resultaat("Artiest B", "Titel B", True),
+        ])
+
+        try:
+            scan = voer_spotify_scan_uit(
+                database,
+                client=client,
+                uitvoer=io.StringIO(),
+            )
+
+            self.assertEqual(scan.verwerkt, 2)
+            self.assertEqual(scan.fouten, 1)
+            self.assertEqual(scan.gevonden, 1)
+            self.assertIsNone(
+                verkrijg_provider_resultaat(
+                    database,
+                    "Artiest A - Titel A.mp3",
+                    "spotify",
+                )
+            )
+            self.assertIsNotNone(
+                verkrijg_provider_resultaat(
+                    database,
+                    "Artiest B - Titel B.mp3",
+                    "spotify",
+                )
+            )
+        finally:
+            database.sluit()
 
 
 if __name__ == "__main__":
