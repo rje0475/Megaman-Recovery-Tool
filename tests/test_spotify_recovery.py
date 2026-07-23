@@ -2,15 +2,18 @@ import io
 import json
 import os
 import sqlite3
+import sys
 import tempfile
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from database import SQLiteDatabase, maak_database
 from spotify import MuziekResultaat, SpotifyApiFout
 from spotify_recovery import (
+    _verwachte_duur_ms,
     bereken_matchscore,
     exporteer_spotify_recovery_playlist,
     voer_spotify_recovery_uit,
@@ -98,6 +101,75 @@ class SpotifyRecoveryTest(unittest.TestCase):
         return self.database.verbinding.execute(
             "SELECT * FROM recovery_provider_resultaten"
         ).fetchone()
+
+    def _mp3_item(self, bestand):
+        cursor = self.database.verbinding.execute(
+            """
+            INSERT INTO mp3_bestanden (
+                relatief_pad, bestand, bestaat, nul_bytes, rar_status,
+                ffmpeg_status
+            ) VALUES (?, ?, 1, 0, 'NIET_GECONTROLEERD',
+                      'NIET_GECONTROLEERD')
+            """,
+            (Path(bestand).name, str(bestand)),
+        )
+        self.database.verbinding.execute(
+            "UPDATE mp3_bestanden SET id = rowid WHERE rowid = ?",
+            (cursor.lastrowid,),
+        )
+        self.database.verbinding.commit()
+        return {"mp3_id": cursor.lastrowid}
+
+    def test_verwachte_duur_ontbrekend_of_leeg_bestand_is_none(self):
+        ontbrekend = self.root / "ontbreekt.mp3"
+        leeg = self.root / "leeg.mp3"
+        leeg.write_bytes(b"")
+
+        self.assertIsNone(
+            _verwachte_duur_ms(
+                self.database, self._mp3_item(ontbrekend)
+            )
+        )
+        self.assertIsNone(
+            _verwachte_duur_ms(self.database, self._mp3_item(leeg))
+        )
+
+    def test_verwachte_duur_beschadigde_mp3_is_none(self):
+        class HeaderNotFoundError(Exception):
+            pass
+
+        beschadigd = self.root / "beschadigd.mp3"
+        beschadigd.write_bytes(b"dit is geen MPEG-frame")
+
+        with patch.dict(sys.modules, {
+            "mutagen": SimpleNamespace(
+                File=lambda bestand: (_ for _ in ()).throw(
+                    HeaderNotFoundError("can't sync to MPEG frame")
+                )
+            )
+        }):
+            self.assertIsNone(
+                _verwachte_duur_ms(
+                    self.database, self._mp3_item(beschadigd)
+                )
+            )
+
+    def test_verwachte_duur_mutagen_leesfout_is_none(self):
+        bestand = self.root / "onleesbaar.mp3"
+        bestand.write_bytes(b"niet leeg")
+
+        with patch.dict(sys.modules, {
+            "mutagen": SimpleNamespace(
+                File=lambda bestand: (_ for _ in ()).throw(
+                    RuntimeError("kan niet lezen")
+                )
+            )
+        }):
+            self.assertIsNone(
+                _verwachte_duur_ms(
+                    self.database, self._mp3_item(bestand)
+                )
+            )
 
     def test_sterke_artiest_titelmatch(self):
         self._item()

@@ -277,6 +277,28 @@ class SQLiteDatabase:
             )
             """
         )
+        self.verbinding.execute(
+            """
+            CREATE TABLE IF NOT EXISTS extraction_results (
+                id INTEGER PRIMARY KEY,
+                rar_set_key TEXT,
+                rar_startbestand TEXT NOT NULL,
+                bronmap TEXT NOT NULL,
+                doelmap TEXT NOT NULL,
+                par2_status TEXT NOT NULL,
+                extraction_status TEXT NOT NULL,
+                executable_path TEXT,
+                executable_type TEXT,
+                command TEXT,
+                return_code INTEGER,
+                stdout TEXT NOT NULL DEFAULT '',
+                stderr TEXT NOT NULL DEFAULT '',
+                message TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                duration_ms INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
         kolommen = {
             rij["name"]
             for rij in self.verbinding.execute(

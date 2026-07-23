@@ -104,3 +104,18 @@ Of verwijder alle door dit script gemarkeerde demo's:
 ```powershell
 python tools/create_demo_recovery_test.py --cleanup-all
 ```
+
+# RAR-extractie
+
+Na een analyse kan een downloadmap veilig worden uitgepakt:
+
+```powershell
+python main.py --extract "C:\pad\naar\downloadmap"
+```
+
+De opdracht leest de laatste opgeslagen PAR2-verificatie uit
+`megaman_recovery.db`. Alleen RAR-sets met status `COMPLETE` worden vanaf
+`part01.rar` uitgepakt. `REPAIRABLE`, `NOT_REPAIRABLE`, `UNKNOWN` en een
+ontbrekende verificatie worden overgeslagen. De uitvoer komt standaard in de
+submap `extracted`; bestaande bestanden worden niet overschreven. Resultaten
+en skips worden opgeslagen in de SQLite-tabel `extraction_results`.

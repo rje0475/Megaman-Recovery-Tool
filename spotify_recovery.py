@@ -124,10 +124,13 @@ def _verwachte_duur_ms(database, item):
     if rij is None:
         return None
     try:
+        bestand = Path(rij["bestand"])
+        if not bestand.is_file() or bestand.stat().st_size == 0:
+            return None
         from mutagen import File
-        audio = File(rij["bestand"])
+        audio = File(bestand)
         return round(audio.info.length * 1000) if audio and audio.info else None
-    except (ImportError, OSError, AttributeError):
+    except Exception:
         return None
 
 
