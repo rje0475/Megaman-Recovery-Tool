@@ -113,6 +113,7 @@ def maak_rapport(map_pad, database):
             f"Gekoppelde RAR-sets : "
             f"{par_overzicht['gekoppelde_rar_sets']}\n"
         )
+        f.write(f"Compleet            : {par_overzicht['compleet']}\n")
         f.write(f"Repareerbaar        : {par_overzicht['repareerbaar']}\n")
         f.write(
             f"Niet repareerbaar   : "
@@ -121,6 +122,67 @@ def maak_rapport(map_pad, database):
         f.write(f"Geen PAR            : {par_overzicht['geen_par']}\n")
         f.write(f"Geen RAR            : {par_overzicht['geen_rar']}\n")
         f.write(f"Onbekend            : {par_overzicht['onbekend']}\n\n")
+
+        par_verificaties = database.verbinding.execute(
+            """
+            SELECT i.par_set_key, i.gekoppelde_rar_set_key,
+                   i.status AS inventory_status,
+                   v.par2_file, v.executable_path,
+                   v.verification_status, v.verification_summary,
+                   v.return_code, v.verified_at, v.duration_ms,
+                   v.timed_out
+            FROM par_inventory AS i
+            LEFT JOIN par_verifications AS v
+              ON v.par_set_key = i.par_set_key
+            WHERE i.aantal_par_bestanden > 0
+            ORDER BY i.par_set_key
+            """
+        )
+        for item in par_verificaties:
+            status = item["verification_status"] or item["inventory_status"]
+            return_code = (
+                item["return_code"]
+                if item["return_code"] is not None
+                else "geen"
+            )
+            duration_ms = (
+                item["duration_ms"]
+                if item["duration_ms"] is not None
+                else 0
+            )
+            f.write(f"PAR2-set     : {item['par_set_key']}\n")
+            f.write(
+                f"RAR-set      : "
+                f"{item['gekoppelde_rar_set_key'] or 'geen'}\n"
+            )
+            f.write(f"PAR2-file    : {item['par2_file'] or 'onbekend'}\n")
+            f.write(
+                f"Executable   : "
+                f"{item['executable_path'] or 'niet gevonden'}\n"
+            )
+            f.write(
+                f"Status       : "
+                f"{status}\n"
+            )
+            f.write(
+                f"Samenvatting : "
+                f"{item['verification_summary'] or 'niet geverifieerd'}\n"
+            )
+            f.write(
+                f"Returncode   : "
+                f"{return_code}\n"
+            )
+            f.write(
+                f"Geverifieerd : {item['verified_at'] or 'niet'}\n"
+            )
+            f.write(
+                f"Duur         : "
+                f"{duration_ms} ms\n"
+            )
+            f.write(
+                f"Timeout      : "
+                f"{'ja' if item['timed_out'] else 'nee'}\n\n"
+            )
 
         f.write("Recovery-items\n")
         f.write("------------------------------\n")

@@ -226,7 +226,8 @@ def voer_rar_inventory_uit(
     rar_map,
     database,
     uitvoer=None,
-    listing_lezer=None
+    listing_lezer=None,
+    vergelijk=True,
 ):
     """
     Inventariseer alle RAR-sets en vergelijk ze met actieve MP3-records.
@@ -271,7 +272,8 @@ def voer_rar_inventory_uit(
             )
 
     eindig_rar_inventory_scan(database)
-    vergelijk_rar_inventory(database)
+    if vergelijk:
+        vergelijk_rar_inventory(database)
     overzicht = verkrijg_rar_inventory_overzicht(database)
     toon_rar_inventory_overzicht(overzicht, uitvoer)
     return overzicht
