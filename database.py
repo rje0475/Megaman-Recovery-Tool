@@ -24,6 +24,7 @@ class SQLiteDatabase:
         self.verbinding.execute(
             """
             CREATE TABLE IF NOT EXISTS mp3_bestanden (
+                id INTEGER,
                 relatief_pad TEXT PRIMARY KEY,
                 bestand TEXT NOT NULL,
                 bestaat INTEGER NOT NULL,
@@ -34,6 +35,32 @@ class SQLiteDatabase:
                 ffmpeg_type TEXT,
                 ffmpeg_melding TEXT
             )
+            """
+        )
+        mp3_kolommen = {
+            rij["name"]
+            for rij in self.verbinding.execute(
+                "PRAGMA table_info(mp3_bestanden)"
+            )
+        }
+
+        if "id" not in mp3_kolommen:
+            self.verbinding.execute(
+                "ALTER TABLE mp3_bestanden ADD COLUMN id INTEGER"
+            )
+
+        self.verbinding.execute(
+            """
+            UPDATE mp3_bestanden
+            SET id = rowid
+            WHERE id IS NULL
+            """
+        )
+        self.verbinding.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS
+                idx_mp3_bestanden_id
+            ON mp3_bestanden (id)
             """
         )
         self.verbinding.execute(
@@ -92,6 +119,41 @@ class SQLiteDatabase:
                 gekoppeld_op TEXT,
                 FOREIGN KEY (rar_set_key)
                     REFERENCES rar_sets (rar_set_key)
+                    ON DELETE CASCADE,
+                UNIQUE (rar_set_key, verwacht_rel_pad_norm)
+            )
+            """
+        )
+        self.verbinding.execute(
+            """
+            CREATE TABLE IF NOT EXISTS recovery_items (
+                id INTEGER PRIMARY KEY,
+                rar_set_key TEXT NOT NULL,
+                verwacht_rel_pad TEXT NOT NULL,
+                verwacht_rel_pad_norm TEXT NOT NULL,
+                probleem_type TEXT NOT NULL,
+                probleem_bron TEXT NOT NULL,
+                verwachte_grootte INTEGER,
+                verwachte_crc32 TEXT,
+                mp3_id INTEGER,
+                inventaris_id INTEGER,
+                ffmpeg_fout TEXT,
+                rar_fout TEXT,
+                feit_ontbreekt INTEGER NOT NULL DEFAULT 0,
+                feit_rar_crc INTEGER NOT NULL DEFAULT 0,
+                feit_corrupt INTEGER NOT NULL DEFAULT 0,
+                feit_nul_bytes INTEGER NOT NULL DEFAULT 0,
+                feit_grootte_afwijking INTEGER NOT NULL DEFAULT 0,
+                spotify_verwerkt INTEGER NOT NULL DEFAULT 0,
+                download_verwerkt INTEGER NOT NULL DEFAULT 0,
+                geplaatst INTEGER NOT NULL DEFAULT 0,
+                aangemaakt_op TEXT NOT NULL,
+                bijgewerkt_op TEXT NOT NULL,
+                FOREIGN KEY (mp3_id)
+                    REFERENCES mp3_bestanden (id)
+                    ON DELETE SET NULL,
+                FOREIGN KEY (inventaris_id)
+                    REFERENCES rar_inventory_items (id)
                     ON DELETE CASCADE,
                 UNIQUE (rar_set_key, verwacht_rel_pad_norm)
             )
@@ -181,6 +243,7 @@ class SQLiteDatabase:
     @staticmethod
     def _naar_dict(rij):
         return {
+            "id": rij["id"],
             "bestand": Path(rij["bestand"]),
             "relatief_pad": rij["relatief_pad"],
             "bestaat": bool(rij["bestaat"]),
@@ -249,6 +312,14 @@ def voeg_mp3_toe(database, basis_map, bestand):
             None,
             None
         )
+    )
+    database.verbinding.execute(
+        """
+        UPDATE mp3_bestanden
+        SET id = rowid
+        WHERE relatief_pad = ? AND id IS NULL
+        """,
+        (relatief_pad,)
     )
     database.verbinding.commit()
 
@@ -696,6 +767,47 @@ def verkrijg_ontbrekende_rar_items(database):
         WHERE sets.actief = 1 AND inventaris.ontbreekt = 1
         ORDER BY inventaris.rar_set_key,
                  inventaris.verwacht_rel_pad_norm
+        """
+    ).fetchall()
+    return [dict(rij) for rij in rijen]
+
+
+def verkrijg_recovery_overzicht(database):
+    """
+    Geef aantallen per hoofdprobleemtype terug.
+    """
+
+    rij = database.verbinding.execute(
+        """
+        SELECT
+            COUNT(*) AS totaal,
+            COALESCE(SUM(CASE WHEN probleem_type = 'ontbreekt'
+                              THEN 1 ELSE 0 END), 0) AS ontbreekt,
+            COALESCE(SUM(CASE WHEN probleem_type = 'corrupt'
+                              THEN 1 ELSE 0 END), 0) AS corrupt,
+            COALESCE(SUM(CASE WHEN probleem_type = 'nul_bytes'
+                              THEN 1 ELSE 0 END), 0) AS nul_bytes,
+            COALESCE(SUM(CASE WHEN probleem_type = 'grootte_afwijking'
+                              THEN 1 ELSE 0 END), 0)
+                AS grootte_afwijking,
+            COALESCE(SUM(CASE WHEN probleem_type = 'rar_crc'
+                              THEN 1 ELSE 0 END), 0) AS rar_crc
+        FROM recovery_items
+        """
+    ).fetchone()
+    return dict(rij)
+
+
+def verkrijg_recovery_items(database):
+    """
+    Geef alle actuele recovery-items terug.
+    """
+
+    rijen = database.verbinding.execute(
+        """
+        SELECT *
+        FROM recovery_items
+        ORDER BY rar_set_key, verwacht_rel_pad_norm
         """
     ).fetchall()
     return [dict(rij) for rij in rijen]
