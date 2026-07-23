@@ -190,10 +190,32 @@ class SpotifyClient:
         if not artiest or not titel:
             raise ValueError("Artiest en titel mogen niet leeg zijn.")
 
+        nummers = self.zoek_nummers(artiest, titel, limiet=1)
+
+        if not nummers:
+            return MuziekResultaat(
+                provider=SPOTIFY_PROVIDER,
+                zoek_artiest=artiest.strip(),
+                zoek_titel=titel.strip(),
+                gevonden=False
+            )
+        return nummers[0]
+
+    def zoek_nummers(self, artiest, titel, limiet=10):
+        """
+        Zoek meerdere kandidaten zodat herstelmatching zelf kan rangschikken.
+        """
+
+        artiest = artiest.strip()
+        titel = titel.strip()
+
+        if not artiest or not titel:
+            raise ValueError("Artiest en titel mogen niet leeg zijn.")
+
         parameters = {
             "q": f"track:{titel} artist:{artiest}",
             "type": "track",
-            "limit": 1
+            "limit": max(1, min(int(limiet), 50))
         }
 
         if self.market:
@@ -208,32 +230,25 @@ class SpotifyClient:
 
         nummers = data.get("tracks", {}).get("items", [])
 
-        if not nummers:
-            return MuziekResultaat(
+        return [
+            MuziekResultaat(
                 provider=SPOTIFY_PROVIDER,
                 zoek_artiest=artiest,
                 zoek_titel=titel,
-                gevonden=False
+                gevonden=True,
+                track_id=nummer.get("id"),
+                url=nummer.get("external_urls", {}).get("spotify"),
+                artiest=", ".join(
+                    uitvoerende.get("name", "")
+                    for uitvoerende in nummer.get("artists", [])
+                    if uitvoerende.get("name")
+                ),
+                titel=nummer.get("name"),
+                album=nummer.get("album", {}).get("name"),
+                duur_ms=nummer.get("duration_ms")
             )
-
-        nummer = nummers[0]
-
-        return MuziekResultaat(
-            provider=SPOTIFY_PROVIDER,
-            zoek_artiest=artiest,
-            zoek_titel=titel,
-            gevonden=True,
-            track_id=nummer.get("id"),
-            url=nummer.get("external_urls", {}).get("spotify"),
-            artiest=", ".join(
-                uitvoerende.get("name", "")
-                for uitvoerende in nummer.get("artists", [])
-                if uitvoerende.get("name")
-            ),
-            titel=nummer.get("name"),
-            album=nummer.get("album", {}).get("name"),
-            duur_ms=nummer.get("duration_ms")
-        )
+            for nummer in nummers
+        ]
 
     def _haal_toegangstoken(self):
         if (

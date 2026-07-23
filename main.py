@@ -10,6 +10,7 @@ from identity import bepaal_recovery_identiteiten
 from scanner import controleer_mp3_bestanden
 from scanner import zoek_mp3_bestanden
 from spotify import voer_spotify_scan_uit
+from spotify_recovery import voer_spotify_recovery_uit
 
 
 print("===================================")
@@ -100,6 +101,7 @@ for rar in part01_bestanden:
 
 genereer_recovery_items(database)
 bepaal_recovery_identiteiten(database)
+voer_spotify_recovery_uit(database)
 
 # --------------------------------------------------
 # Tellingen

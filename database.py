@@ -192,6 +192,40 @@ class SQLiteDatabase:
                     f"ALTER TABLE recovery_items "
                     f"ADD COLUMN {kolom} {kolomtype}"
                 )
+        self.verbinding.execute(
+            """
+            CREATE TABLE IF NOT EXISTS recovery_provider_resultaten (
+                id INTEGER PRIMARY KEY,
+                recovery_item_id INTEGER NOT NULL,
+                relatief_pad TEXT,
+                provider TEXT NOT NULL,
+                provider_track_id TEXT,
+                provider_url TEXT,
+                gevonden_artiest TEXT,
+                gevonden_titel TEXT,
+                gevonden_album TEXT,
+                gevonden_duur_ms INTEGER,
+                zoekmethode TEXT NOT NULL,
+                matchscore REAL,
+                resultaat_type TEXT NOT NULL,
+                foutmelding TEXT,
+                gezocht_op TEXT NOT NULL,
+                retry_na TEXT,
+                identiteit_handtekening TEXT NOT NULL,
+                FOREIGN KEY (recovery_item_id)
+                    REFERENCES recovery_items (id)
+                    ON DELETE CASCADE,
+                UNIQUE (recovery_item_id, provider)
+            )
+            """
+        )
+        self.verbinding.execute(
+            """
+            CREATE INDEX IF NOT EXISTS
+                idx_recovery_provider_resultaat_type
+            ON recovery_provider_resultaten (provider, resultaat_type)
+            """
+        )
         kolommen = {
             rij["name"]
             for rij in self.verbinding.execute(
