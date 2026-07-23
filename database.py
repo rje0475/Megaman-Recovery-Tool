@@ -14,6 +14,7 @@ class SQLiteDatabase:
         self.pad = Path(pad)
         self.verbinding = sqlite3.connect(self.pad)
         self.verbinding.row_factory = sqlite3.Row
+        self.verbinding.execute("PRAGMA foreign_keys = ON")
         self._maak_tabel()
 
     def _maak_tabel(self):
@@ -32,6 +33,27 @@ class SQLiteDatabase:
             )
             """
         )
+        self.verbinding.execute(
+            """
+            CREATE TABLE IF NOT EXISTS provider_resultaten (
+                relatief_pad TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                zoek_artiest TEXT NOT NULL,
+                zoek_titel TEXT NOT NULL,
+                gevonden INTEGER NOT NULL,
+                track_id TEXT,
+                url TEXT,
+                artiest TEXT,
+                titel TEXT,
+                album TEXT,
+                duur_ms INTEGER,
+                PRIMARY KEY (relatief_pad, provider),
+                FOREIGN KEY (relatief_pad)
+                    REFERENCES mp3_bestanden (relatief_pad)
+                    ON DELETE CASCADE
+            )
+            """
+        )
         self.verbinding.commit()
 
     def nieuwe_scan(self):
@@ -39,6 +61,7 @@ class SQLiteDatabase:
         Begin met een lege scanset, zoals de eerdere dictionary.
         """
 
+        self.verbinding.execute("DELETE FROM provider_resultaten")
         self.verbinding.execute("DELETE FROM mp3_bestanden")
         self.verbinding.commit()
 
@@ -202,3 +225,97 @@ def verkrijg_mp3(database, relatief_pad):
     """
 
     return database.get(relatief_pad)
+
+
+def bewaar_provider_resultaat(
+    database,
+    relatief_pad,
+    provider,
+    zoek_artiest,
+    zoek_titel,
+    gevonden,
+    track_id=None,
+    url=None,
+    artiest=None,
+    titel=None,
+    album=None,
+    duur_ms=None
+):
+    """
+    Bewaar een gevonden of niet-gevonden resultaat van een muziekprovider.
+    """
+
+    database.verbinding.execute(
+        """
+        INSERT INTO provider_resultaten (
+            relatief_pad,
+            provider,
+            zoek_artiest,
+            zoek_titel,
+            gevonden,
+            track_id,
+            url,
+            artiest,
+            titel,
+            album,
+            duur_ms
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (relatief_pad, provider) DO UPDATE SET
+            zoek_artiest = excluded.zoek_artiest,
+            zoek_titel = excluded.zoek_titel,
+            gevonden = excluded.gevonden,
+            track_id = excluded.track_id,
+            url = excluded.url,
+            artiest = excluded.artiest,
+            titel = excluded.titel,
+            album = excluded.album,
+            duur_ms = excluded.duur_ms
+        """,
+        (
+            relatief_pad,
+            provider,
+            zoek_artiest,
+            zoek_titel,
+            gevonden,
+            track_id,
+            url,
+            artiest,
+            titel,
+            album,
+            duur_ms
+        )
+    )
+    database.verbinding.commit()
+
+
+def verkrijg_provider_resultaat(database, relatief_pad, provider):
+    """
+    Geef het opgeslagen resultaat van een muziekprovider terug.
+    """
+
+    rij = database.verbinding.execute(
+        """
+        SELECT *
+        FROM provider_resultaten
+        WHERE relatief_pad = ? AND provider = ?
+        """,
+        (relatief_pad, provider)
+    ).fetchone()
+
+    if rij is None:
+        return None
+
+    return {
+        "relatief_pad": rij["relatief_pad"],
+        "provider": rij["provider"],
+        "zoek_artiest": rij["zoek_artiest"],
+        "zoek_titel": rij["zoek_titel"],
+        "gevonden": bool(rij["gevonden"]),
+        "track_id": rij["track_id"],
+        "url": rij["url"],
+        "artiest": rij["artiest"],
+        "titel": rij["titel"],
+        "album": rij["album"],
+        "duur_ms": rij["duur_ms"]
+    }
