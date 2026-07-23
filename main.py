@@ -5,6 +5,7 @@ from report import maak_rapport
 from rar import zoek_part01_bestanden
 from rar import test_rar
 from rar_inventory import voer_rar_inventory_uit
+from par_inventory import voer_par_inventory_uit
 from recovery import genereer_recovery_items
 from identity import bepaal_recovery_identiteiten
 from scanner import controleer_mp3_bestanden
@@ -75,6 +76,8 @@ voer_rar_inventory_uit(
     rar_map,
     database
 )
+
+voer_par_inventory_uit(rar_map, database)
 
 # --------------------------------------------------
 # Spotify-verrijking

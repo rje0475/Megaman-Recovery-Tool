@@ -7,6 +7,7 @@ from database import verkrijg_recovery_items
 from database import verkrijg_recovery_overzicht
 from identity import verkrijg_identiteit_overzicht
 from spotify_recovery import verkrijg_spotify_recovery_overzicht
+from par_inventory import verkrijg_par_overzicht
 
 
 def maak_rapport(map_pad, database):
@@ -30,6 +31,7 @@ def maak_rapport(map_pad, database):
     recovery_items = verkrijg_recovery_items(database)
     identiteit_overzicht = verkrijg_identiteit_overzicht(database)
     spotify_recovery = verkrijg_spotify_recovery_overzicht(database)
+    par_overzicht = verkrijg_par_overzicht(database)
 
     for gegevens in database.values():
 
@@ -103,6 +105,22 @@ def maak_rapport(map_pad, database):
                 f.write(f"Pad     : {item['verwacht_rel_pad']}\n")
                 f.write(f"Grootte : {grootte}\n")
                 f.write(f"CRC     : {crc}\n\n")
+
+        f.write("PAR2-inventaris\n")
+        f.write("------------------------------\n")
+        f.write(f"PAR2-sets           : {par_overzicht['par_sets']}\n")
+        f.write(
+            f"Gekoppelde RAR-sets : "
+            f"{par_overzicht['gekoppelde_rar_sets']}\n"
+        )
+        f.write(f"Repareerbaar        : {par_overzicht['repareerbaar']}\n")
+        f.write(
+            f"Niet repareerbaar   : "
+            f"{par_overzicht['niet_repareerbaar']}\n"
+        )
+        f.write(f"Geen PAR            : {par_overzicht['geen_par']}\n")
+        f.write(f"Geen RAR            : {par_overzicht['geen_rar']}\n")
+        f.write(f"Onbekend            : {par_overzicht['onbekend']}\n\n")
 
         f.write("Recovery-items\n")
         f.write("------------------------------\n")
