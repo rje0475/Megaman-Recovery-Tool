@@ -1,12 +1,17 @@
 import re
-import shutil
-import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
 from paden import normaliseer_relatief_pad_sleutel
+from par2_verifier import (
+    classificeer_par2_resultaat,
+    onbekend_zonder_tool,
+    serialiseer_command,
+    vind_par2_executable,
+    voer_par2_verificatie_uit,
+)
 
 
 PAR_VOLUME = re.compile(
@@ -15,17 +20,9 @@ PAR_VOLUME = re.compile(
 )
 PAR_BASIS = re.compile(r"^(?P<basis>.+)\.par2$", re.IGNORECASE)
 GELDIGE_STATUSSEN = {
-    "OK", "REPAIRABLE", "NOT_REPAIRABLE",
+    "OK", "COMPLETE", "REPAIRABLE", "NOT_REPAIRABLE",
     "NO_RAR", "NO_PAR", "UNKNOWN",
 }
-PAR_TOOL_KANDIDATEN = (
-    r"C:\Program Files\MultiPar\par2j64.exe",
-    r"C:\Program Files\MultiPar\par2j.exe",
-    "par2",
-    "par2cmdline",
-    "par2j64",
-    "par2j",
-)
 
 
 @dataclass(frozen=True)
@@ -43,6 +40,16 @@ class ParVerificatie:
     recovery_blocks_benodigd: int | None = None
     tool: str | None = None
     melding: str | None = None
+    tool_source: str | None = None
+    par2_file: str | None = None
+    command: tuple[str, ...] = ()
+    return_code: int | None = None
+    stdout: str = ""
+    stderr: str = ""
+    verified_at: str | None = None
+    duration_ms: int = 0
+    timed_out: bool = False
+    error_type: str | None = None
 
 
 def detecteer_par_sets(par_map):
@@ -106,116 +113,55 @@ def koppel_par_aan_rar(par_set_key, rar_set_keys):
 
 
 def vind_par_tool():
-    for kandidaat in PAR_TOOL_KANDIDATEN:
-        pad = Path(kandidaat)
-        if pad.is_absolute() and pad.exists():
-            return str(pad)
-        gevonden = shutil.which(kandidaat)
-        if gevonden:
-            return gevonden
-    return None
+    gevonden = vind_par2_executable()
+    return str(gevonden.pad) if gevonden else None
 
 
 def parseer_par_verificatie(uitvoer, tool=None, returncode=0):
     """Parseer gangbare par2cmdline- en MultiPar-verificatiemeldingen."""
 
-    tekst = uitvoer or ""
-    beschikbaar = _eerste_getal(
-        tekst,
-        (
-            r"(?i)(\d+)\s+recovery blocks?\s+(?:are\s+)?available",
-            r"(?i)recovery blocks?\s+available\s*[:=]\s*(\d+)",
-        ),
-    )
-    benodigd = _eerste_getal(
-        tekst,
-        (
-            r"(?i)(?:you\s+)?need\s+(\d+)\s+(?:more\s+)?"
-            r"recovery blocks?",
-            r"(?i)recovery blocks?\s+(?:needed|required)\s*[:=]\s*(\d+)",
-        ),
-    )
-    laag = tekst.casefold()
-    if (
-        "all files are correct" in laag
-        or "repair is not required" in laag
-        or "all files are complete" in laag
-    ):
-        status = "OK"
-    elif (
-        "repair is not possible" in laag
-        or "not enough recovery blocks" in laag
-        or (
-            beschikbaar is not None
-            and benodigd is not None
-            and beschikbaar < benodigd
-        )
-    ):
-        status = "NOT_REPAIRABLE"
-    elif (
-        "repair is possible" in laag
-        or (
-            beschikbaar is not None
-            and benodigd is not None
-            and benodigd > 0
-            and beschikbaar >= benodigd
-        )
-    ):
-        status = "REPAIRABLE"
-    else:
-        status = "UNKNOWN"
-    regels = [regel.strip() for regel in tekst.splitlines() if regel.strip()]
-    melding = " | ".join(regels[-5:]) if regels else (
-        f"PAR2-tool eindigde met code {returncode} zonder leesbare uitvoer."
+    classificatie = classificeer_par2_resultaat(
+        uitvoer, "", returncode
     )
     return ParVerificatie(
-        status=status,
-        recovery_blocks_beschikbaar=beschikbaar,
-        recovery_blocks_benodigd=benodigd,
+        status=classificatie.status,
+        recovery_blocks_beschikbaar=
+            classificatie.recovery_blocks_beschikbaar,
+        recovery_blocks_benodigd=classificatie.recovery_blocks_benodigd,
         tool=tool,
-        melding=melding,
+        melding=classificatie.samenvatting,
+        return_code=returncode,
+        stdout=uitvoer or "",
+        verified_at=datetime.now().isoformat(timespec="seconds"),
     )
 
 
-def _eerste_getal(tekst, patronen):
-    for patroon in patronen:
-        match = re.search(patroon, tekst)
-        if match:
-            return int(match.group(1))
-    return None
-
-
-def verifieer_par_set(par_set, tool=None):
+def verifieer_par_set(par_set, executable=None):
     """Voer uitsluitend PAR2-verificatie uit; nooit reparatie."""
 
-    tool = tool or vind_par_tool()
-    if not tool:
-        return ParVerificatie(
-            status="UNKNOWN",
-            melding="Geen ondersteunde PAR2-verificatietool gevonden.",
-        )
-    programmanaam = Path(tool).name.casefold()
-    opdracht = (
-        [tool, "v", str(par_set.startbestand)]
-        if programmanaam.startswith("par2j")
-        else [tool, "verify", str(par_set.startbestand)]
+    executable = executable or vind_par2_executable()
+    resultaat = (
+        voer_par2_verificatie_uit(executable, par_set.startbestand)
+        if executable
+        else onbekend_zonder_tool(par_set.startbestand)
     )
-    try:
-        resultaat = subprocess.run(
-            opdracht,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=180,
-        )
-    except (OSError, subprocess.TimeoutExpired) as fout:
-        return ParVerificatie(
-            status="UNKNOWN", tool=tool, melding=str(fout)
-        )
-    uitvoer = f"{resultaat.stdout}\n{resultaat.stderr}"
-    return parseer_par_verificatie(
-        uitvoer, tool=tool, returncode=resultaat.returncode
+    return ParVerificatie(
+        status=resultaat.verification_status,
+        recovery_blocks_beschikbaar=
+            resultaat.recovery_blocks_beschikbaar,
+        recovery_blocks_benodigd=resultaat.recovery_blocks_benodigd,
+        tool=resultaat.executable_path,
+        melding=resultaat.verification_summary,
+        tool_source=resultaat.executable_source,
+        par2_file=resultaat.par2_file,
+        command=resultaat.command,
+        return_code=resultaat.return_code,
+        stdout=resultaat.stdout,
+        stderr=resultaat.stderr,
+        verified_at=resultaat.verified_at,
+        duration_ms=resultaat.duration_ms,
+        timed_out=resultaat.timed_out,
+        error_type=resultaat.error_type,
     )
 
 
@@ -225,7 +171,16 @@ def voer_par_inventory_uit(
     """Synchroniseer de actuele read-only PAR2-inventaris."""
 
     uitvoer = uitvoer or sys.stdout
-    verificatie_lezer = verificatie_lezer or verifieer_par_set
+    executable = vind_par2_executable() if verificatie_lezer is None else None
+    if verificatie_lezer is None:
+        if executable is None:
+            uitvoer.write(
+                "PAR2-tool niet gevonden: stel PAR2_PATH in of installeer "
+                "een commandline PAR2-tool.\n"
+            )
+        verificatie_lezer = (
+            lambda par_set: verifieer_par_set(par_set, executable)
+        )
     par_sets = detecteer_par_sets(par_map)
     rar_set_keys = [
         rij["rar_set_key"]
@@ -288,6 +243,7 @@ def _maak_rij(par_set, rar_sleutel, verificatie):
         "status": verificatie.status,
         "verificatie_tool": verificatie.tool,
         "verificatie_melding": verificatie.melding,
+        "_verificatie": verificatie,
     }
 
 
@@ -313,6 +269,47 @@ def _synchroniseer(database, rijen):
                 rij["verificatie_tool"], rij["verificatie_melding"], nu,
             ),
         )
+        verificatie = rij.get("_verificatie")
+        if (
+            verificatie is not None
+            and rij["gekoppelde_rar_set_key"] is not None
+        ):
+            database.verbinding.execute(
+                """
+                INSERT INTO par_verifications (
+                  par_set_key, executable_path, executable_source,
+                  par2_file, command, return_code, verification_status,
+                  verification_summary, stdout, stderr, verified_at,
+                  duration_ms, timed_out, error_type
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (par_set_key) DO UPDATE SET
+                  executable_path = excluded.executable_path,
+                  executable_source = excluded.executable_source,
+                  par2_file = excluded.par2_file,
+                  command = excluded.command,
+                  return_code = excluded.return_code,
+                  verification_status = excluded.verification_status,
+                  verification_summary = excluded.verification_summary,
+                  stdout = excluded.stdout,
+                  stderr = excluded.stderr,
+                  verified_at = excluded.verified_at,
+                  duration_ms = excluded.duration_ms,
+                  timed_out = excluded.timed_out,
+                  error_type = excluded.error_type
+                """,
+                (
+                    rij["par_set_key"], verificatie.tool,
+                    verificatie.tool_source,
+                    verificatie.par2_file or rij["par_startbestand"],
+                    serialiseer_command(verificatie.command),
+                    verificatie.return_code, verificatie.status,
+                    verificatie.melding or "Geen samenvatting.",
+                    verificatie.stdout, verificatie.stderr,
+                    verificatie.verified_at or nu,
+                    verificatie.duration_ms, verificatie.timed_out,
+                    verificatie.error_type,
+                ),
+            )
     database.verbinding.commit()
 
 
@@ -328,6 +325,8 @@ def verkrijg_par_overzicht(database):
             AS gekoppelde_rar_sets,
           SUM(CASE WHEN status = 'REPAIRABLE' THEN 1 ELSE 0 END)
             AS repareerbaar,
+          SUM(CASE WHEN status IN ('COMPLETE', 'OK') THEN 1 ELSE 0 END)
+            AS compleet,
           SUM(CASE WHEN status = 'NOT_REPAIRABLE' THEN 1 ELSE 0 END)
             AS niet_repareerbaar,
           SUM(CASE WHEN status = 'NO_PAR' THEN 1 ELSE 0 END)
@@ -339,7 +338,20 @@ def verkrijg_par_overzicht(database):
         FROM par_inventory
         """
     ).fetchone()
-    return {sleutel: rij[sleutel] or 0 for sleutel in rij.keys()}
+    overzicht = {sleutel: rij[sleutel] or 0 for sleutel in rij.keys()}
+    overzicht["items"] = [
+        dict(item)
+        for item in database.verbinding.execute(
+            """
+            SELECT par_set_key, gekoppelde_rar_set_key, status,
+                   verificatie_melding
+            FROM par_inventory
+            WHERE aantal_par_bestanden > 0
+            ORDER BY par_set_key
+            """
+        )
+    ]
+    return overzicht
 
 
 def toon_par_overzicht(overzicht, uitvoer=None):
@@ -349,6 +361,7 @@ def toon_par_overzicht(overzicht, uitvoer=None):
     uitvoer.write(
         f"Gekoppelde RAR-sets   : {overzicht['gekoppelde_rar_sets']}\n"
     )
+    uitvoer.write(f"Compleet              : {overzicht['compleet']}\n")
     uitvoer.write(f"Repareerbaar          : {overzicht['repareerbaar']}\n")
     uitvoer.write(
         f"Niet repareerbaar     : {overzicht['niet_repareerbaar']}\n"
@@ -356,3 +369,9 @@ def toon_par_overzicht(overzicht, uitvoer=None):
     uitvoer.write(f"Geen PAR              : {overzicht['geen_par']}\n")
     uitvoer.write(f"Geen RAR              : {overzicht['geen_rar']}\n")
     uitvoer.write(f"Onbekend              : {overzicht['onbekend']}\n")
+    # Compact per-setoverzicht zonder omvangrijke procesuitvoer.
+    for rij in overzicht.get("items", []):
+        uitvoer.write(
+            f"[{rij['par_set_key']}] {rij['status']} - "
+            f"{rij['verificatie_melding'] or 'Geen samenvatting.'}\n"
+        )

@@ -1,5 +1,58 @@
 # Megaman Recovery Tool
 
+## PAR2-verificatie (alleen-lezen)
+
+Tijdens `--analyze` koppelt Megaman Recovery Tool aangetroffen PAR2-sets aan
+de bijbehorende RAR-sets en voert het uitsluitend een verificatieopdracht uit.
+Er wordt nooit automatisch gerepareerd of uitgepakt. De uitkomst wordt als
+`COMPLETE`, `REPAIRABLE`, `NOT_REPAIRABLE` of `UNKNOWN` opgeslagen in SQLite
+en opgenomen in de console- en tekstrapportage.
+
+De commandline-verifier wordt in deze volgorde gezocht:
+
+1. het expliciete pad in `PAR2_PATH`;
+2. `par2.exe`, `par2`, `par2j64.exe` of `par2j.exe` via `PATH`;
+3. bekende installatielocaties van SABnzbd, MultiPar en QuickPar.
+
+Alleen commandlineprogramma's worden gebruikt. De grafische
+`QuickPar.exe` wordt expliciet geweigerd.
+
+Een expliciet pad instellen en daarna analyseren:
+
+```powershell
+$env:PAR2_PATH = "C:\Program Files\SABnzbd\win\par2\par2.exe"
+& $env:PAR2_PATH
+python main.py --analyze "C:\ProgramData\NZBGet\intermediate\4fe20a6a4f204822ed17e88d.#2"
+```
+
+`PAR2_PATH` geldt hiermee alleen voor de huidige PowerShell-sessie. Permanent
+instellen voor de huidige gebruiker kan met:
+
+```powershell
+[Environment]::SetEnvironmentVariable(
+    "PAR2_PATH",
+    "C:\Program Files\SABnzbd\win\par2\par2.exe",
+    "User"
+)
+```
+
+Open daarna zo nodig een nieuwe PowerShell-sessie. De commandline
+`par2.exe` uit SABnzbd is geschikt; `QuickPar.exe` zelf niet. Automatische
+PAR2-reparatie en RAR-extractie zijn bewust nog niet ingebouwd en horen bij
+een latere stap.
+
+Zonder gevonden verifier gaat de overige analyse door en verschijnt:
+
+```text
+PAR2-tool niet gevonden: stel PAR2_PATH in of installeer een commandline PAR2-tool.
+```
+
+De verificatie heeft per PAR2-set een time-out van 120 seconden. Een
+time-out, startfout of niet-herkende tooluitvoer wordt als `UNKNOWN`
+geregistreerd; één mislukte set stopt de andere sets niet. Zowel het gebruikte
+executablepad en commando als returncode, duur, samenvatting en begrensde
+stdout/stderr worden voor diagnose bewaard.
+
 ## Demo-praktijktest
 
 De demo bouwt een volledig geïsoleerde herstelomgeving met uitsluitend zelf

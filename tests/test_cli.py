@@ -124,12 +124,12 @@ class AnalyseWorkflowTest(unittest.TestCase):
                 patch("analyse.controleer_mp3_bestanden"),
                 patch("analyse.voer_rar_inventory_uit"),
                 patch("analyse.voer_par_inventory_uit"),
+                patch("analyse.vergelijk_rar_inventory"),
                 patch("analyse.voer_spotify_scan_uit"),
                 patch("analyse.genereer_recovery_items"),
                 patch("analyse.bepaal_recovery_identiteiten"),
                 patch("analyse.voer_spotify_recovery_uit"),
                 patch("analyse.maak_rapport", return_value=rapport),
-                patch("analyse.vind_par_tool", return_value=None),
             ]
             mocks = [context.start() for context in patches]
             try:
@@ -144,7 +144,7 @@ class AnalyseWorkflowTest(unittest.TestCase):
                     context.stop()
 
         self.assertIsInstance(resultaat, AnalyseResultaat)
-        for mock in mocks[3:10]:
+        for mock in mocks[3:11]:
             mock.assert_called_once()
         self.assertTrue(database.gesloten)
 

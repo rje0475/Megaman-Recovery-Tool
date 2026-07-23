@@ -24,7 +24,7 @@ from database import (  # noqa: E402
     verkrijg_recovery_items,
 )
 from identity import bepaal_recovery_identiteiten  # noqa: E402
-from rar import test_rar  # noqa: E402
+from rar import test_rar as controleer_rar  # noqa: E402
 from rar_inventory import (  # noqa: E402
     RarListingResultaat,
     voer_rar_inventory_uit,
@@ -303,7 +303,7 @@ def voer_demo_uit(basis_map=None, uitvoer=None, rar_programma=None):
         )
         if fixture_items is None:
             for startbestand in paden.rar.glob("*.part01.rar"):
-                test_rar(startbestand, database)
+                controleer_rar(startbestand, database)
         genereer_recovery_items(database, uitvoer=uitvoer)
         bepaal_recovery_identiteiten(database, uitvoer=uitvoer)
         spotify = voer_spotify_recovery_uit(

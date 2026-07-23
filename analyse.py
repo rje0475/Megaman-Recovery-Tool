@@ -2,9 +2,13 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from database import DATABASE_BESTAND, maak_database
+from database import (
+    DATABASE_BESTAND,
+    maak_database,
+    vergelijk_rar_inventory,
+)
 from identity import bepaal_recovery_identiteiten
-from par_inventory import vind_par_tool, voer_par_inventory_uit
+from par_inventory import voer_par_inventory_uit
 from rar import ZEVEN_ZIP, zoek_part01_bestanden, test_rar
 from rar_inventory import voer_rar_inventory_uit
 from recovery import genereer_recovery_items
@@ -69,17 +73,11 @@ def voer_analyse(
         controleer_mp3_bestanden(mp3_bestanden, mp3_map, database)
 
         uitvoer.write("\nRAR-inventaris uitlezen...\n")
-        voer_rar_inventory_uit(rar_map, database, uitvoer=uitvoer)
-
-        if vind_par_tool() is None:
-            uitvoer.write(
-                "PAR2-tool niet gevonden: PAR2-verificatie wordt als "
-                "UNKNOWN vastgelegd; detectie en koppeling gaan door.\n"
-            )
+        voer_rar_inventory_uit(
+            rar_map, database, uitvoer=uitvoer, vergelijk=False
+        )
         voer_par_inventory_uit(rar_map, database, uitvoer=uitvoer)
-
-        uitvoer.write("\nSpotify-verrijking...\n")
-        voer_spotify_scan_uit(database, uitvoer=uitvoer)
+        vergelijk_rar_inventory(database)
 
         uitvoer.write("\nRAR-sets controleren...\n")
         for rar in rar_bestanden:
@@ -92,6 +90,9 @@ def voer_analyse(
 
         genereer_recovery_items(database, uitvoer=uitvoer)
         bepaal_recovery_identiteiten(database, uitvoer=uitvoer)
+
+        uitvoer.write("\nSpotify-verrijking...\n")
+        voer_spotify_scan_uit(database, uitvoer=uitvoer)
         voer_spotify_recovery_uit(database, uitvoer=uitvoer)
 
         totaal = len(database)
