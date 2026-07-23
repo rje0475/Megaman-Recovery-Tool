@@ -26,6 +26,7 @@ def maak_parser():
         epilog=(
             "Voorbeelden:\n"
             "  python main.py\n"
+            "  python main.py --gui\n"
             "  python main.py --analyze \"C:\\pad\\naar\\map\"\n"
             "  python main.py --repair \"C:\\pad\\naar\\map\"\n"
             "  python main.py --extract \"C:\\pad\\naar\\downloadmap\"\n"
@@ -35,6 +36,11 @@ def maak_parser():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     acties = parser.add_mutually_exclusive_group()
+    acties.add_argument(
+        "--gui",
+        action="store_true",
+        help="start de desktopinterface",
+    )
     acties.add_argument(
         "--repair",
         metavar="MAP",
@@ -115,6 +121,13 @@ def main(argv=None, invoer=input, uitvoer=None):
     args = maak_parser().parse_args(argv)
     uitvoer.write(BANNER + "\n")
     try:
+        if args.gui:
+            from gui import GuiDependencyFout, start_gui
+            try:
+                return start_gui()
+            except GuiDependencyFout as fout:
+                uitvoer.write(f"FOUT: {fout}\n")
+                return 1
         if args.demo:
             from tools.create_demo_recovery_test import voer_demo_uit
             voer_demo_uit(uitvoer=uitvoer)
