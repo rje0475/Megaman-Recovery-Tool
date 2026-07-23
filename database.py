@@ -47,6 +47,7 @@ class SQLiteDatabase:
                 titel TEXT,
                 album TEXT,
                 duur_ms INTEGER,
+                zoekmethode TEXT NOT NULL DEFAULT 'not_found',
                 PRIMARY KEY (relatief_pad, provider),
                 FOREIGN KEY (relatief_pad)
                     REFERENCES mp3_bestanden (relatief_pad)
@@ -54,6 +55,21 @@ class SQLiteDatabase:
             )
             """
         )
+        kolommen = {
+            rij["name"]
+            for rij in self.verbinding.execute(
+                "PRAGMA table_info(provider_resultaten)"
+            )
+        }
+
+        if "zoekmethode" not in kolommen:
+            self.verbinding.execute(
+                """
+                ALTER TABLE provider_resultaten
+                ADD COLUMN zoekmethode TEXT NOT NULL DEFAULT 'not_found'
+                """
+            )
+
         self.verbinding.commit()
 
     def nieuwe_scan(self):
@@ -239,7 +255,8 @@ def bewaar_provider_resultaat(
     artiest=None,
     titel=None,
     album=None,
-    duur_ms=None
+    duur_ms=None,
+    zoekmethode="not_found"
 ):
     """
     Bewaar een gevonden of niet-gevonden resultaat van een muziekprovider.
@@ -258,9 +275,10 @@ def bewaar_provider_resultaat(
             artiest,
             titel,
             album,
-            duur_ms
+            duur_ms,
+            zoekmethode
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (relatief_pad, provider) DO UPDATE SET
             zoek_artiest = excluded.zoek_artiest,
             zoek_titel = excluded.zoek_titel,
@@ -270,7 +288,8 @@ def bewaar_provider_resultaat(
             artiest = excluded.artiest,
             titel = excluded.titel,
             album = excluded.album,
-            duur_ms = excluded.duur_ms
+            duur_ms = excluded.duur_ms,
+            zoekmethode = excluded.zoekmethode
         """,
         (
             relatief_pad,
@@ -283,7 +302,8 @@ def bewaar_provider_resultaat(
             artiest,
             titel,
             album,
-            duur_ms
+            duur_ms,
+            zoekmethode
         )
     )
     database.verbinding.commit()
@@ -317,5 +337,6 @@ def verkrijg_provider_resultaat(database, relatief_pad, provider):
         "artiest": rij["artiest"],
         "titel": rij["titel"],
         "album": rij["album"],
-        "duur_ms": rij["duur_ms"]
+        "duur_ms": rij["duur_ms"],
+        "zoekmethode": rij["zoekmethode"]
     }

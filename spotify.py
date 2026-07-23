@@ -1,8 +1,9 @@
 import base64
 import json
 import os
+import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -13,6 +14,39 @@ from database import bewaar_provider_resultaat
 SPOTIFY_PROVIDER = "spotify"
 SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token"
 SPOTIFY_API_URL = "https://api.spotify.com/v1"
+
+ZOEKMETHODE_ORIGINAL = "original"
+ZOEKMETHODE_CLEANED = "cleaned"
+ZOEKMETHODE_NOT_FOUND = "not_found"
+
+ONNODIGE_TERMEN = re.compile(
+    r"""
+    \b(?:
+        official\s+(?:music\s+)?video
+        |official\s+audio
+        |lyric\s+video
+        |lyrics?
+        |hd
+        |hq
+    )\b
+    """,
+    re.IGNORECASE | re.VERBOSE
+)
+REMASTER_TERMEN = re.compile(
+    r"""
+    \b
+    (?:(?:19|20)\d{2}\s+)?
+    (?:digital(?:ly)?\s+)?
+    remaster(?:ed)?
+    (?:\s+(?:19|20)\d{2})?
+    (?:\s+(?:version|edition))?
+    \b
+    """,
+    re.IGNORECASE | re.VERBOSE
+)
+VOORLOOP_TRACKNUMMER = re.compile(
+    r"^\s*\d{1,3}(?:\s*[._-]\s*|\s+)"
+)
 
 
 class SpotifyFout(RuntimeError):
@@ -49,6 +83,43 @@ class MuziekResultaat:
     titel: str | None = None
     album: str | None = None
     duur_ms: int | None = None
+    zoekmethode: str | None = None
+
+
+def schoon_mp3_bestandsnaam(bestandsnaam):
+    """
+    Maak een MP3-bestandsnaam geschikt voor een Spotify-zoekopdracht.
+    """
+
+    return _schoon_zoekveld(bestandsnaam, verwijder_tracknummer=True)
+
+
+def schoon_spotify_zoekwaarden(artiest, titel):
+    """
+    Schoon artiest en titel op zonder betekenisvolle tekst te splitsen.
+    """
+
+    return (
+        _schoon_zoekveld(artiest, verwijder_tracknummer=False),
+        schoon_mp3_bestandsnaam(titel)
+    )
+
+
+def _schoon_zoekveld(waarde, verwijder_tracknummer):
+    tekst = str(waarde).strip()
+    tekst = re.sub(r"(?i)\.mp3$", "", tekst)
+    tekst = tekst.replace("_", " ")
+
+    if verwijder_tracknummer:
+        tekst = VOORLOOP_TRACKNUMMER.sub("", tekst)
+
+    tekst = ONNODIGE_TERMEN.sub(" ", tekst)
+    tekst = REMASTER_TERMEN.sub(" ", tekst)
+    tekst = re.sub(r"[\(\)\[\]\{\}]", " ", tekst)
+    tekst = re.sub(r"\s+", " ", tekst).strip()
+    tekst = re.sub(r"^(?:[-–—]\s*)+", "", tekst)
+    tekst = re.sub(r"(?:\s*[-–—])+$", "", tekst)
+    return tekst.strip()
 
 
 class SpotifyClient:
@@ -245,6 +316,29 @@ def zoek_en_bewaar_spotify_nummer(
     client = client or SpotifyClient.uit_omgeving()
     resultaat = client.zoek_nummer(artiest, titel)
 
+    if resultaat.gevonden:
+        resultaat = replace(
+            resultaat,
+            zoekmethode=ZOEKMETHODE_ORIGINAL
+        )
+    else:
+        schone_artiest, schone_titel = schoon_spotify_zoekwaarden(
+            artiest,
+            titel
+        )
+        resultaat = client.zoek_nummer(
+            schone_artiest or artiest.strip(),
+            schone_titel or titel.strip()
+        )
+        resultaat = replace(
+            resultaat,
+            zoekmethode=(
+                ZOEKMETHODE_CLEANED
+                if resultaat.gevonden
+                else ZOEKMETHODE_NOT_FOUND
+            )
+        )
+
     bewaar_provider_resultaat(
         database=database,
         relatief_pad=relatief_pad,
@@ -257,7 +351,8 @@ def zoek_en_bewaar_spotify_nummer(
         artiest=resultaat.artiest,
         titel=resultaat.titel,
         album=resultaat.album,
-        duur_ms=resultaat.duur_ms
+        duur_ms=resultaat.duur_ms,
+        zoekmethode=resultaat.zoekmethode
     )
 
     return resultaat
