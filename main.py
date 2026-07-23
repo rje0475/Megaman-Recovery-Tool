@@ -4,6 +4,7 @@ from database import maak_database
 from report import maak_rapport
 from rar import zoek_part01_bestanden
 from rar import test_rar
+from rar_inventory import voer_rar_inventory_uit
 from scanner import controleer_mp3_bestanden
 from scanner import zoek_mp3_bestanden
 from spotify import voer_spotify_scan_uit
@@ -58,6 +59,17 @@ mp3_bestanden = zoek_mp3_bestanden(mp3_map)
 controleer_mp3_bestanden(
     mp3_bestanden,
     mp3_map,
+    database
+)
+
+# --------------------------------------------------
+# RAR-inventaris
+# --------------------------------------------------
+
+print("\nRAR-inventaris uitlezen...")
+
+voer_rar_inventory_uit(
+    rar_map,
     database
 )
 
