@@ -13,6 +13,8 @@ from core.spotify.models import (
 )
 from core.spotify.scoring import normaliseer_tekst, score_track
 from core.spotify.search import (
+    SpotifyRecoverySetError,
+    beschikbare_recovery_sets,
     voer_spotify_search_uit,
     zoek_beste_match,
 )
@@ -85,24 +87,33 @@ class SpotifySearchEngineDatabaseTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.db = maak_database(Path(self.temp.name) / "test.db")
+        self.set_id = verkrijg_of_maak_recovery_set(
+            self.db, "Current.part01.rar"
+        )
 
     def tearDown(self):
         self.db.sluit()
         self.temp.cleanup()
 
-    def _item(self, artist, title, path="set/song.mp3"):
+    def _item(
+        self, artist, title, path="set/song.mp3", recovery_set_id=None
+    ):
         now = "2026-01-01T00:00:00"
         cursor = self.db.verbinding.execute(
             """
             INSERT INTO recovery_items (
-              rar_set_key, verwacht_rel_pad, verwacht_rel_pad_norm,
+              rar_set_key, recovery_set_id,
+              verwacht_rel_pad, verwacht_rel_pad_norm,
               probleem_type, probleem_bron, feit_ontbreekt,
               spotify_verwerkt, download_verwerkt, geplaatst,
               bepaalde_artiest, bepaalde_titel, aangemaakt_op, bijgewerkt_op
-            ) VALUES ('set', ?, ?, 'ontbreekt', 'test', 1, 0, 0, 0,
+            ) VALUES ('set', ?, ?, ?, 'ontbreekt', 'salvage', 1, 0, 0, 0,
                       ?, ?, ?, ?)
             """,
-            (path, path.casefold(), artist, title, now, now),
+            (
+                recovery_set_id or self.set_id,
+                path, path.casefold(), artist, title, now, now,
+            ),
         )
         self.db.verbinding.commit()
         return cursor.lastrowid
@@ -121,6 +132,19 @@ class SpotifySearchEngineDatabaseTest(unittest.TestCase):
         self.assertEqual(rij["archive_name"], "Andere Naam.part001.rar")
         self.assertEqual(rij["archive_set_name"], "Andere Naam")
 
+    def test_zonder_geldige_set_wordt_niet_gestart(self):
+        leeg = maak_database(Path(self.temp.name) / "leeg.db")
+        try:
+            with self.assertRaisesRegex(
+                SpotifyRecoverySetError, "Geen geldige recovery-set"
+            ):
+                voer_spotify_search_uit(
+                    leeg, client=FakeSpotifyClient(),
+                    uitvoer=io.StringIO(),
+                )
+        finally:
+            leeg.sluit()
+
     def test_match_wordt_volledig_op_recovery_item_opgeslagen(self):
         item_id = self._item("Artist", "Song")
         client = FakeSpotifyClient({
@@ -129,7 +153,9 @@ class SpotifySearchEngineDatabaseTest(unittest.TestCase):
             )
         })
         log = io.StringIO()
-        summary = voer_spotify_search_uit(self.db, client, log)
+        summary = voer_spotify_search_uit(
+            self.db, client=client, uitvoer=log
+        )
         rij = self.db.verbinding.execute(
             "SELECT * FROM recovery_items WHERE id=?", (item_id,)
         ).fetchone()
@@ -141,6 +167,7 @@ class SpotifySearchEngineDatabaseTest(unittest.TestCase):
         self.assertEqual(json.loads(rij["spotify_artists"]), ["Artist"])
         self.assertGreater(rij["spotify_confidence"], .85)
         self.assertIn("Confidence:", log.getvalue())
+        self.assertEqual(summary.recovery_set_id, self.set_id)
 
     def test_not_found_low_confidence_en_manual_review_worden_bewaard(self):
         not_found = self._item("Nobody", "Missing", "set/missing.mp3")
@@ -152,7 +179,7 @@ class SpotifySearchEngineDatabaseTest(unittest.TestCase):
             )
         })
         summary = voer_spotify_search_uit(
-            self.db, client, io.StringIO()
+            self.db, client=client, uitvoer=io.StringIO()
         )
         statuses = {
             rij["id"]: rij["spotify_status"]
@@ -185,7 +212,7 @@ class SpotifySearchEngineDatabaseTest(unittest.TestCase):
             )
         })
         summary = voer_spotify_search_uit(
-            self.db, client, io.StringIO()
+            self.db, client=client, uitvoer=io.StringIO()
         )
         rij = self.db.verbinding.execute(
             "SELECT spotify_status FROM recovery_items WHERE id=?",
@@ -194,6 +221,122 @@ class SpotifySearchEngineDatabaseTest(unittest.TestCase):
         self.assertEqual(summary.skipped_manual, 1)
         self.assertEqual(client.queries, [])
         self.assertIsNone(rij["spotify_status"])
+
+    def test_explicit_selecteren_op_id_en_naam_mengt_sets_niet(self):
+        andere_id = verkrijg_of_maak_recovery_set(
+            self.db, "Andere.part01.rar"
+        )
+        huidig = self._item("A", "Een", "set/een.mp3")
+        ander = self._item(
+            "B", "Twee", "set/twee.mp3", recovery_set_id=andere_id
+        )
+        client = FakeSpotifyClient()
+        via_id = voer_spotify_search_uit(
+            self.db, recovery_set_id=self.set_id,
+            client=client, uitvoer=io.StringIO(),
+        )
+        self.assertEqual((via_id.total, via_id.processed), (1, 1))
+        self.assertEqual(
+            self.db.verbinding.execute(
+                "SELECT spotify_status FROM recovery_items WHERE id=?",
+                (ander,),
+            ).fetchone()["spotify_status"],
+            None,
+        )
+        via_naam = voer_spotify_search_uit(
+            self.db, archive_set_name="andere",
+            client=client, uitvoer=io.StringIO(),
+        )
+        self.assertEqual(via_naam.recovery_set_id, andere_id)
+        self.assertEqual(via_naam.processed, 1)
+        self.assertIsNotNone(huidig)
+
+    def test_automatisch_meest_recente_geldige_set_en_lijst(self):
+        andere_id = verkrijg_of_maak_recovery_set(
+            self.db, "Nieuwste.part01.rar"
+        )
+        self.db.verbinding.execute(
+            "UPDATE recovery_sets SET updated_at='2099-01-01' WHERE id=?",
+            (andere_id,),
+        )
+        self.db.verbinding.commit()
+        self._item(
+            "A", "Titel", "nieuw/titel.mp3", recovery_set_id=andere_id
+        )
+        log = io.StringIO()
+        summary = voer_spotify_search_uit(
+            self.db, client=FakeSpotifyClient(), uitvoer=log
+        )
+        self.assertEqual(summary.recovery_set_id, andere_id)
+        self.assertIn("Automatisch geselecteerde recovery-set", log.getvalue())
+        sets = beschikbare_recovery_sets(self.db)
+        self.assertEqual(sets[0].archive_set_name, "Nieuwste")
+        self.assertEqual(sets[0].recovery_item_count, 1)
+
+    def test_automatische_resultaten_skip_force_en_handmatig_nooit(self):
+        automatisch = self._item("A", "Een", "set/auto.mp3")
+        handmatig = self._item("B", "Twee", "set/manual2.mp3")
+        self.db.verbinding.execute(
+            "UPDATE recovery_items SET spotify_status='MATCHED' WHERE id=?",
+            (automatisch,),
+        )
+        self.db.verbinding.execute(
+            """
+            INSERT INTO spotify_smart_results (
+              recovery_item_id, local_path, status, checked_at, reason
+            ) VALUES (?, 'set/manual2.mp3', 'REVIEWED_NONE', 'nu', 'handmatig')
+            """,
+            (handmatig,),
+        )
+        self.db.verbinding.commit()
+        standaard = voer_spotify_search_uit(
+            self.db, recovery_set_id=self.set_id,
+            client=FakeSpotifyClient(), uitvoer=io.StringIO(),
+        )
+        self.assertEqual(standaard.processed, 0)
+        self.assertEqual(standaard.skipped_automatic, 1)
+        self.assertEqual(standaard.skipped_manual, 1)
+        geforceerd = voer_spotify_search_uit(
+            self.db, recovery_set_id=self.set_id, force=True,
+            client=FakeSpotifyClient(), uitvoer=io.StringIO(),
+        )
+        self.assertEqual(geforceerd.processed, 1)
+        self.assertEqual(geforceerd.skipped_manual, 1)
+
+    def test_grote_batch_wordt_beveiligd_en_kan_expliciet(self):
+        for nummer in range(501):
+            self._item(
+                "A", f"Track {nummer}", f"set/track{nummer}.mp3"
+            )
+        with self.assertRaisesRegex(
+            SpotifyRecoverySetError, "Aantal recovery-items: 501"
+        ):
+            voer_spotify_search_uit(
+                self.db, recovery_set_id=self.set_id,
+                client=FakeSpotifyClient(), uitvoer=io.StringIO(),
+            )
+        toegestaan = voer_spotify_search_uit(
+            self.db, recovery_set_id=self.set_id,
+            allow_large_batch=True, client=FakeSpotifyClient(),
+            uitvoer=io.StringIO(),
+        )
+        self.assertEqual(toegestaan.processed, 501)
+
+    def test_gerichte_set_met_24_definitieve_items(self):
+        set_id = verkrijg_of_maak_recovery_set(
+            self.db, "Megaman2007.part01.rar"
+        )
+        for nummer in range(24):
+            self._item(
+                "Artist", f"Track {nummer}",
+                f"2007/track{nummer}.mp3", recovery_set_id=set_id,
+            )
+        summary = voer_spotify_search_uit(
+            self.db, archive_set_name="Megaman2007",
+            client=FakeSpotifyClient(), uitvoer=io.StringIO(),
+        )
+        self.assertEqual(summary.total, 24)
+        self.assertEqual(summary.processed, 24)
 
 
 if __name__ == "__main__":

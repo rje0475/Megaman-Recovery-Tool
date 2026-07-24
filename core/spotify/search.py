@@ -9,12 +9,22 @@ from core.spotify.models import (
     MATCHED,
     NOT_FOUND,
     SpotifyMatch,
+    RecoverySetInfo,
     SpotifySearchSummary,
 )
 from core.spotify.scoring import score_track
 
 
 MATCH_THRESHOLD = 0.85
+MAX_SAFE_BATCH = 500
+AUTOMATIC_STATUSES = (
+    MATCHED, LOW_CONFIDENCE, NOT_FOUND, MANUAL_REVIEW,
+)
+MANUAL_STATUSES = ("MANUAL", "REVIEWED_NONE")
+
+
+class SpotifyRecoverySetError(RuntimeError):
+    pass
 
 
 def _lokale_duur_ms(bestand):
@@ -90,27 +100,132 @@ def _bewaar_match(database, item_id, match):
     database.verbinding.commit()
 
 
-def voer_spotify_search_uit(database, client=None, uitvoer=None):
-    uitvoer = uitvoer or sys.stdout
-    client = client or SpotifyClient.from_environment()
-    items = database.verbinding.execute(
+def beschikbare_recovery_sets(database):
+    rijen = database.verbinding.execute(
         """
-        SELECT r.*, m.bestand AS local_file
+        SELECT s.id, s.archive_set_name, s.archive_name,
+               s.created_at, s.updated_at, COUNT(r.id) recovery_item_count
+        FROM recovery_sets s
+        LEFT JOIN recovery_items r
+          ON r.recovery_set_id=s.id
+         AND r.probleem_bron LIKE '%salvage%'
+        GROUP BY s.id
+        ORDER BY s.updated_at DESC, s.id DESC
+        """
+    ).fetchall()
+    return tuple(
+        RecoverySetInfo(
+            rij["id"], rij["archive_set_name"], rij["archive_name"],
+            rij["recovery_item_count"], rij["created_at"], rij["updated_at"],
+        )
+        for rij in rijen
+    )
+
+
+def _selecteer_recovery_set(
+    database, recovery_set_id=None, archive_set_name=None
+):
+    voorwaarden, waarden = [], []
+    if recovery_set_id is not None:
+        voorwaarden.append("s.id=?")
+        waarden.append(int(recovery_set_id))
+    if archive_set_name is not None:
+        voorwaarden.append("s.archive_set_name=? COLLATE NOCASE")
+        waarden.append(str(archive_set_name).strip())
+    if voorwaarden:
+        rij = database.verbinding.execute(
+            f"""
+            SELECT s.*, COUNT(r.id) recovery_item_count
+            FROM recovery_sets s
+            LEFT JOIN recovery_items r
+              ON r.recovery_set_id=s.id
+             AND r.probleem_bron LIKE '%salvage%'
+            WHERE {' AND '.join(voorwaarden)}
+            GROUP BY s.id
+            """,
+            waarden,
+        ).fetchone()
+        automatisch = False
+    else:
+        rij = database.verbinding.execute(
+            """
+            SELECT s.*, COUNT(r.id) recovery_item_count
+            FROM recovery_sets s
+            JOIN recovery_items r
+              ON r.recovery_set_id=s.id
+             AND r.probleem_bron LIKE '%salvage%'
+            GROUP BY s.id
+            HAVING COUNT(r.id)>0
+            ORDER BY s.updated_at DESC, s.id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        automatisch = True
+    if rij is None:
+        raise SpotifyRecoverySetError(
+            "Geen geldige recovery-set met definitieve recovery-items gevonden."
+        )
+    return rij, automatisch
+
+
+def voer_spotify_search_uit(
+    database, recovery_set_id=None, archive_set_name=None,
+    force=False, allow_large_batch=False, client=None, uitvoer=None,
+):
+    uitvoer = uitvoer or sys.stdout
+    recovery_set, automatisch = _selecteer_recovery_set(
+        database, recovery_set_id, archive_set_name
+    )
+    set_id = recovery_set["id"]
+    set_naam = recovery_set["archive_set_name"]
+    totaal = recovery_set["recovery_item_count"]
+    if automatisch:
+        uitvoer.write(
+            f"Automatisch geselecteerde recovery-set: {set_naam}\n"
+        )
+    rijen = database.verbinding.execute(
+        """
+        SELECT r.*, m.bestand AS local_file, s.status AS smart_status
         FROM recovery_items r
         LEFT JOIN mp3_bestanden m ON m.id=r.mp3_id
         LEFT JOIN spotify_smart_results s ON s.recovery_item_id=r.id
-        WHERE COALESCE(s.status, '') NOT IN ('MANUAL', 'REVIEWED_NONE')
+        WHERE r.recovery_set_id=?
+          AND r.probleem_bron LIKE '%salvage%'
         ORDER BY r.id
-        """
+        """,
+        (set_id,),
     ).fetchall()
-    handmatig = database.verbinding.execute(
-        """
-        SELECT COUNT(*) aantal
-        FROM recovery_items r
-        JOIN spotify_smart_results s ON s.recovery_item_id=r.id
-        WHERE s.status IN ('MANUAL', 'REVIEWED_NONE')
-        """
-    ).fetchone()["aantal"]
+    handmatige_ids = {
+        item["id"] for item in rijen
+        if item["smart_status"] in MANUAL_STATUSES
+        or item["spotify_status"] in MANUAL_STATUSES
+    }
+    automatische_ids = {
+        item["id"] for item in rijen
+        if item["id"] not in handmatige_ids
+        and item["spotify_status"] in AUTOMATIC_STATUSES
+    }
+    items = tuple(
+        item for item in rijen
+        if item["id"] not in handmatige_ids
+        and (force or item["id"] not in automatische_ids)
+    )
+    uitvoer.write(
+        f"Spotify recovery-set: {set_naam}\n"
+        f"Recovery-set-ID: {set_id}\n"
+        f"Te verwerken recovery-items: {len(items)}\n"
+        f"Reeds verwerkt en overgeslagen: "
+        f"{0 if force else len(automatische_ids)}\n"
+        f"Handmatige keuzes overgeslagen: {len(handmatige_ids)}\n"
+    )
+    if totaal > MAX_SAFE_BATCH and not allow_large_batch:
+        raise SpotifyRecoverySetError(
+            "Spotify-zoekopdracht afgebroken.\n"
+            f"Geselecteerde recovery-set: {set_naam}\n"
+            f"Aantal recovery-items: {totaal}\n"
+            "Dit lijkt geen gerichte recovery-set te zijn."
+        )
+    client = client or (SpotifyClient.from_environment() if items else None)
     telling = {
         MATCHED: 0, LOW_CONFIDENCE: 0,
         NOT_FOUND: 0, MANUAL_REVIEW: 0,
@@ -143,7 +258,21 @@ def voer_spotify_search_uit(database, client=None, uitvoer=None):
                 "Geen Spotify-resultaat gevonden\n"
                 f"Status:\n{match.status}\n"
             )
+    overgeslagen_automatisch = 0 if force else len(automatische_ids)
+    overgeslagen = overgeslagen_automatisch + len(handmatige_ids)
+    uitvoer.write(
+        f"\nRecovery-set: {set_naam}\n"
+        f"Totaal in set: {totaal}\n"
+        f"Verwerkt: {len(items)}\n"
+        f"Overgeslagen: {overgeslagen}\n"
+        f"MATCHED: {telling[MATCHED]}\n"
+        f"LOW_CONFIDENCE: {telling[LOW_CONFIDENCE]}\n"
+        f"NOT_FOUND: {telling[NOT_FOUND]}\n"
+        f"MANUAL_REVIEW: {telling[MANUAL_REVIEW]}\n"
+    )
     return SpotifySearchSummary(
-        len(items), telling[MATCHED], telling[LOW_CONFIDENCE],
-        telling[NOT_FOUND], telling[MANUAL_REVIEW], handmatig,
+        set_id, set_naam, totaal, len(items), overgeslagen,
+        telling[MATCHED], telling[LOW_CONFIDENCE],
+        telling[NOT_FOUND], telling[MANUAL_REVIEW],
+        overgeslagen_automatisch, len(handmatige_ids),
     )

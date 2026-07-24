@@ -256,3 +256,19 @@ recovery-item opgeslagen als `MATCHED`, `LOW_CONFIDENCE`, `NOT_FOUND` of
 `MANUAL_REVIEW`.
 
 Deze fase maakt geen playlists, wijzigt geen GUI en downloadt geen media.
+
+De zoekengine verwerkt altijd precies één recovery-set. Geef bij voorkeur
+`recovery_set_id` of `archive_set_name` door; zonder selectie wordt alleen de
+meest recent bijgewerkte geldige set gekozen. Reeds automatisch verwerkte
+items worden standaard overgeslagen en zijn met `force=True` opnieuw te
+zoeken. Handmatige keuzes worden nooit overschreven. Batches boven 500 items
+vereisen expliciet `allow_large_batch=True`.
+
+```python
+voer_spotify_search_uit(
+    database,
+    archive_set_name="Jaarcollectie",
+    force=False,
+    allow_large_batch=False,
+)
+```
