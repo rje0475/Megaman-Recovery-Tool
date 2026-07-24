@@ -1,0 +1,326 @@
+import re
+import sys
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+
+from core.external_tools import detecteer_7zip, detecteer_winrar
+from core.salvage_compare import vergelijk_extractie
+from core.salvage_extractor import salvage_extract
+from core.winrar_recovery import voer_winrar_recovery_uit
+from database import DATABASE_BESTAND, SQLiteDatabase
+from paden import normaliseer_relatief_pad_sleutel
+
+
+@dataclass(frozen=True)
+class ArchiveSet:
+    sleutel: str
+    main_archive: Path
+    volumes: tuple[Path, ...]
+
+
+@dataclass(frozen=True)
+class SalvageSamenvatting:
+    rar_setnaam: str
+    par2_resultaat: str
+    winrar_resultaat: str
+    extractie_resultaat: str
+    verwacht: int
+    goed: int
+    ontbrekend: int
+    nul_bytes: int
+    onleesbaar: int
+    grootteafwijking: int
+    extra: int
+    spotify_recovery_items: int
+    eindstatus: str
+    extractiemap: Path
+
+
+class SalvageFout(RuntimeError):
+    pass
+
+
+def ontdek_archive_sets(bronmap):
+    bronmap = Path(bronmap)
+    sets, gebruikt = [], set()
+    for bestand in sorted(bronmap.rglob("*.rar")):
+        naam = bestand.name.casefold()
+        part = re.match(r"(.+)\.part(\d+)\.rar$", naam)
+        if part and int(part.group(2)) != 1:
+            continue
+        if part:
+            prefix = part.group(1)
+            volumes = tuple(sorted(
+                bestand.parent.glob(f"{bestand.name[:-10]}.part*.rar"),
+                key=lambda p: p.name.casefold(),
+            ))
+            basis = bestand.relative_to(bronmap).with_name(prefix)
+        else:
+            if bestand in gebruikt:
+                continue
+            rvolumes = sorted(
+                bestand.parent.glob(f"{bestand.stem}.r[0-9][0-9]"),
+                key=lambda p: p.name.casefold(),
+            )
+            volumes = (bestand, *rvolumes)
+            basis = bestand.relative_to(bronmap).with_suffix("")
+        gebruikt.update(volumes)
+        sets.append(ArchiveSet(
+            normaliseer_relatief_pad_sleutel(basis),
+            bestand.resolve(), tuple(p.resolve() for p in volumes),
+        ))
+    return tuple(sets)
+
+
+def _identiteit(intern_pad):
+    stam = Path(str(intern_pad).replace("\\", "/")).stem
+    stam = re.sub(r"^\d+\s*[-._]\s*", "", stam)
+    delen = re.split(r"\s+[-–—]\s+", stam, maxsplit=1)
+    return (delen[0], delen[1]) if len(delen) == 2 else (None, stam)
+
+
+def _synchroniseer_recovery(database, set_sleutel, vergelijking):
+    defecten = {
+        item.intern_pad.casefold(): item
+        for item in vergelijking.items
+        if item.status in ("MISSING", "ZERO_BYTE", "UNREADABLE")
+    }
+    for item in defecten.values():
+        artiest, titel = _identiteit(item.intern_pad)
+        database.verbinding.execute(
+            """
+            INSERT INTO recovery_items (
+              rar_set_key, verwacht_rel_pad, verwacht_rel_pad_norm,
+              probleem_type, probleem_bron, verwachte_grootte,
+              feit_ontbreekt, feit_corrupt, feit_nul_bytes,
+              spotify_verwerkt, download_verwerkt, geplaatst,
+              bepaalde_artiest, bepaalde_titel, identiteit_bron,
+              identiteit_betrouwbaarheid, identiteit_reden,
+              aangemaakt_op, bijgewerkt_op
+            ) VALUES (?, ?, ?, ?, 'salvage', ?, ?, ?, ?, 0, 0, 0, ?, ?,
+                      'rar_pad', .75, ?, ?, ?)
+            ON CONFLICT (rar_set_key, verwacht_rel_pad_norm) DO UPDATE SET
+              probleem_type=excluded.probleem_type,
+              probleem_bron='salvage',
+              verwachte_grootte=excluded.verwachte_grootte,
+              feit_ontbreekt=excluded.feit_ontbreekt,
+              feit_corrupt=excluded.feit_corrupt,
+              feit_nul_bytes=excluded.feit_nul_bytes,
+              bepaalde_artiest=COALESCE(recovery_items.bepaalde_artiest,
+                                        excluded.bepaalde_artiest),
+              bepaalde_titel=COALESCE(recovery_items.bepaalde_titel,
+                                      excluded.bepaalde_titel),
+              identiteit_reden=excluded.identiteit_reden,
+              bijgewerkt_op=excluded.bijgewerkt_op
+            """,
+            (
+                set_sleutel, item.intern_pad, item.intern_pad.casefold(),
+                item.status.casefold(), item.verwachte_grootte,
+                item.status == "MISSING", item.status == "UNREADABLE",
+                item.status == "ZERO_BYTE", artiest, titel, item.reden,
+                datetime.now().isoformat(timespec="seconds"),
+                datetime.now().isoformat(timespec="seconds"),
+            ),
+        )
+    for rij in database.verbinding.execute(
+        """
+        SELECT id, verwacht_rel_pad_norm FROM recovery_items
+        WHERE rar_set_key=? AND probleem_bron='salvage'
+        """, (set_sleutel,)
+    ).fetchall():
+        if rij["verwacht_rel_pad_norm"] in defecten:
+            continue
+        beschermd = database.verbinding.execute(
+            """
+            SELECT 1 FROM spotify_smart_results
+            WHERE recovery_item_id=? AND status IN ('MANUAL','REVIEWED_NONE')
+            """, (rij["id"],)
+        ).fetchone()
+        if not beschermd:
+            database.verbinding.execute(
+                "DELETE FROM recovery_items WHERE id=?", (rij["id"],)
+            )
+    database.verbinding.commit()
+    return len(defecten)
+
+
+def _bewaar_run(
+    database, gestart, samenvatting, bronstatus, winrar, extractie,
+    vergelijking, recovery_workspace, gekozen, winrar_tool, zeven_tool,
+):
+    klaar = datetime.now().isoformat(timespec="seconds")
+    cursor = database.verbinding.execute(
+        """
+        INSERT INTO salvage_runs (
+          started_at, finished_at, rar_set_key, source_status, par2_result,
+          winrar_result, winrar_path, sevenzip_result, sevenzip_path,
+          chosen_archive, recovery_workspace, extraction_dir, expected_count,
+          ok_count, missing_count, zero_byte_count, unreadable_count,
+          size_mismatch_count, extra_count, recovery_item_count,
+          final_status, summary
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                  ?, ?)
+        """,
+        (
+            gestart, klaar, samenvatting.rar_setnaam, bronstatus,
+            samenvatting.par2_resultaat, winrar.status,
+            str(winrar_tool.pad) if winrar_tool.pad else None,
+            extractie.status, str(zeven_tool.pad) if zeven_tool.pad else None,
+            str(gekozen), str(recovery_workspace),
+            str(samenvatting.extractiemap), samenvatting.verwacht,
+            samenvatting.goed, samenvatting.ontbrekend,
+            samenvatting.nul_bytes, samenvatting.onleesbaar,
+            samenvatting.grootteafwijking, samenvatting.extra,
+            samenvatting.spotify_recovery_items, samenvatting.eindstatus,
+            repr(samenvatting),
+        ),
+    )
+    for item in vergelijking.items:
+        database.verbinding.execute(
+            """
+            INSERT INTO salvage_file_results (
+              salvage_run_id, internal_path, extracted_path, status,
+              expected_size, actual_size, reason
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                cursor.lastrowid, item.intern_pad,
+                str(item.bestand) if item.bestand else None, item.status,
+                item.verwachte_grootte, item.werkelijke_grootte, item.reden,
+            )
+        )
+    for extra in vergelijking.extras:
+        database.verbinding.execute(
+            """
+            INSERT INTO salvage_file_results (
+              salvage_run_id, internal_path, extracted_path, status, reason
+            ) VALUES (?, ?, ?, 'EXTRA', 'extra_after_salvage')
+            """, (cursor.lastrowid, extra.name, str(extra))
+        )
+    database.verbinding.commit()
+
+
+def voer_salvage_workflow_uit(
+    bronmap, workspace=None, rar_set=None, skip_par2=False,
+    skip_winrar=False, no_spotify=False, database_pad=DATABASE_BESTAND,
+    uitvoer=None, winrar_runner=None, sevenzip_runner=None,
+):
+    uitvoer = uitvoer or sys.stdout
+    bronmap = Path(bronmap).resolve()
+    if not bronmap.is_dir():
+        raise SalvageFout(f"Bronmap bestaat niet: {bronmap}")
+    if not Path(database_pad).is_file():
+        raise SalvageFout(f"Database bestaat niet: {Path(database_pad).resolve()}")
+    workspace = (
+        Path(workspace).resolve() if workspace
+        else bronmap / "megaman_salvage"
+    )
+    sets = ontdek_archive_sets(bronmap)
+    if rar_set:
+        sets = tuple(s for s in sets if s.sleutel.casefold() == rar_set.casefold())
+    if not sets:
+        raise SalvageFout("Geen passende RAR-sets gevonden.")
+    database = SQLiteDatabase(database_pad)
+    winrar_tool, zeven_tool = detecteer_winrar(), detecteer_7zip()
+    samenvattingen = []
+    try:
+        # De bestaande repairservice verwerkt alle REPAIRABLE sets eenmalig.
+        if not skip_par2:
+            aantal = database.verbinding.execute(
+                "SELECT COUNT(*) aantal FROM par_inventory WHERE status='REPAIRABLE'"
+            ).fetchone()["aantal"]
+            if aantal:
+                try:
+                    from par2_repair import voer_par2_reparatie_uit
+                    voer_par2_reparatie_uit(
+                        bronmap, database_pad=database_pad, uitvoer=uitvoer
+                    )
+                except Exception as fout:
+                    uitvoer.write(f"PAR2-repair niet voltooid: {fout}\n")
+        for set_ in sets:
+            gestart = datetime.now().isoformat(timespec="seconds")
+            rij = database.verbinding.execute(
+                """
+                SELECT status FROM par_inventory
+                WHERE gekoppelde_rar_set_key=? OR par_set_key=?
+                LIMIT 1
+                """, (set_.sleutel, set_.sleutel)
+            ).fetchone()
+            bronstatus = rij["status"] if rij else "UNKNOWN"
+            set_workspace = workspace / re.sub(r"[^a-zA-Z0-9._-]+", "_", set_.sleutel)
+            recovery = set_workspace / "recovery"
+            extracted = set_workspace / "extracted"
+            uitvoer.write(
+                f"\nSALVAGE [{set_.sleutel}] PAR2={bronstatus}\n"
+            )
+            if bronstatus == "NOT_REPAIRABLE":
+                uitvoer.write(
+                    "PAR2 onvoldoende; WinRAR/7-Zip salvage wordt geprobeerd.\n"
+                )
+            if not skip_winrar and bronstatus != "COMPLETE":
+                kwargs = {"tool": winrar_tool}
+                if winrar_runner:
+                    kwargs["runner"] = winrar_runner
+                winrar = voer_winrar_recovery_uit(
+                    set_.volumes, recovery, **kwargs
+                )
+            else:
+                from core.winrar_recovery import WinRarResultaat
+                winrar = WinRarResultaat(
+                    "NOT_APPLICABLE", set_.volumes, recovery,
+                    set_.main_archive, None, "", "", (), (),
+                    set_.main_archive, None,
+                )
+            gekozen = (
+                winrar.gekozen_archive
+                if winrar.status in ("SUCCESS", "PARTIAL")
+                else set_.main_archive
+            )
+            kwargs = {"tool": zeven_tool}
+            if sevenzip_runner:
+                kwargs["runner"] = sevenzip_runner
+            extractie = salvage_extract(gekozen, extracted, **kwargs)
+            verwacht = [
+                dict(r) for r in database.verbinding.execute(
+                    """
+                    SELECT verwacht_rel_pad, verwachte_grootte
+                    FROM rar_inventory_items WHERE rar_set_key=?
+                    """, (set_.sleutel,)
+                )
+            ]
+            vergelijking = vergelijk_extractie(verwacht, extracted)
+            recovery_items = _synchroniseer_recovery(
+                database, set_.sleutel, vergelijking
+            )
+            goed = vergelijking.aantal("OK")
+            ontbrekend = vergelijking.aantal("MISSING")
+            nul = vergelijking.aantal("ZERO_BYTE")
+            onleesbaar = vergelijking.aantal("UNREADABLE")
+            grootte = vergelijking.aantal("SIZE_MISMATCH")
+            defect = ontbrekend + nul + onleesbaar
+            bruikbaar = goed + grootte + len(vergelijking.extras)
+            if verwacht and defect == 0:
+                eind = "COMPLETE" if bronstatus == "COMPLETE" else "SALVAGED"
+            elif bruikbaar:
+                eind = "PARTIAL"
+            else:
+                eind = "FAILED"
+            samenvatting = SalvageSamenvatting(
+                set_.sleutel, bronstatus, winrar.status, extractie.status,
+                len(verwacht), goed, ontbrekend, nul, onleesbaar, grootte,
+                len(vergelijking.extras), recovery_items, eind, extracted,
+            )
+            _bewaar_run(
+                database, gestart, samenvatting, bronstatus, winrar,
+                extractie, vergelijking, recovery, gekozen,
+                winrar_tool, zeven_tool,
+            )
+            uitvoer.write(
+                f"{eind}: verwacht {len(verwacht)}, goed {goed}, "
+                f"ontbrekend {ontbrekend}, 0-byte {nul}, "
+                f"onleesbaar {onleesbaar}, extra {len(vergelijking.extras)}\n"
+            )
+            samenvattingen.append(samenvatting)
+    finally:
+        database.sluit()
+    return tuple(samenvattingen)

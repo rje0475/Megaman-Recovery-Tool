@@ -383,6 +383,60 @@ class SQLiteDatabase:
             )
             """
         )
+        rar_item_kolommen = {
+            rij["name"] for rij in self.verbinding.execute(
+                "PRAGMA table_info(rar_inventory_items)"
+            )
+        }
+        if "bronvolume" not in rar_item_kolommen:
+            self.verbinding.execute(
+                "ALTER TABLE rar_inventory_items ADD COLUMN bronvolume TEXT"
+            )
+        self.verbinding.execute(
+            """
+            CREATE TABLE IF NOT EXISTS salvage_runs (
+                id INTEGER PRIMARY KEY,
+                started_at TEXT NOT NULL,
+                finished_at TEXT NOT NULL,
+                rar_set_key TEXT NOT NULL,
+                source_status TEXT,
+                par2_result TEXT,
+                winrar_result TEXT NOT NULL,
+                winrar_path TEXT,
+                sevenzip_result TEXT NOT NULL,
+                sevenzip_path TEXT,
+                chosen_archive TEXT NOT NULL,
+                recovery_workspace TEXT NOT NULL,
+                extraction_dir TEXT NOT NULL,
+                expected_count INTEGER NOT NULL,
+                ok_count INTEGER NOT NULL,
+                missing_count INTEGER NOT NULL,
+                zero_byte_count INTEGER NOT NULL,
+                unreadable_count INTEGER NOT NULL,
+                size_mismatch_count INTEGER NOT NULL,
+                extra_count INTEGER NOT NULL,
+                recovery_item_count INTEGER NOT NULL,
+                final_status TEXT NOT NULL,
+                summary TEXT NOT NULL
+            )
+            """
+        )
+        self.verbinding.execute(
+            """
+            CREATE TABLE IF NOT EXISTS salvage_file_results (
+                id INTEGER PRIMARY KEY,
+                salvage_run_id INTEGER NOT NULL,
+                internal_path TEXT NOT NULL,
+                extracted_path TEXT,
+                status TEXT NOT NULL,
+                expected_size INTEGER,
+                actual_size INTEGER,
+                reason TEXT NOT NULL,
+                FOREIGN KEY (salvage_run_id) REFERENCES salvage_runs(id)
+                    ON DELETE CASCADE
+            )
+            """
+        )
         kolommen = {
             rij["name"]
             for rij in self.verbinding.execute(
@@ -849,6 +903,15 @@ def vervang_rar_inventory_items(
             """,
             (rar_set_key, verouderde_sleutel)
         )
+
+    database.verbinding.execute(
+        """
+        UPDATE rar_inventory_items
+        SET bronvolume = ?
+        WHERE rar_set_key = ? AND bronvolume IS NULL
+        """,
+        (str(rar_startbestand), rar_set_key),
+    )
 
     database.verbinding.commit()
 
