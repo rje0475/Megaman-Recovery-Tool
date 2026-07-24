@@ -11,7 +11,12 @@ from core.spotify.models import (
     NOT_FOUND,
     SpotifyTrack,
 )
-from core.spotify.scoring import normaliseer_tekst, score_track
+from core.spotify.scoring import (
+    bereken_score,
+    normaliseer_artiest,
+    normaliseer_tekst,
+    score_track,
+)
 from core.spotify.search import (
     SpotifyRecoverySetError,
     beschikbare_recovery_sets,
@@ -36,12 +41,13 @@ class FakeSpotifyClient:
 
 
 def track(
-    track_id, artist, title, duration=180000, popularity=50
+    track_id, artist, title, duration=180000, popularity=50,
+    extra_artists=(),
 ):
     return SpotifyTrack(
         track_id, f"spotify:track:{track_id}",
         f"https://open.spotify.com/track/{track_id}", "Album",
-        (artist,), title, duration, popularity,
+        (artist, *extra_artists), title, duration, popularity,
     )
 
 
@@ -49,7 +55,7 @@ class SpotifyScoringTest(unittest.TestCase):
     def test_normalisatie_en_duur_beinvloeden_score(self):
         self.assertEqual(
             normaliseer_tekst("Beyoncé feat. Jay-Z"),
-            "beyonce feat jay z",
+            "beyonce jay z",
         )
         exact = score_track(
             "Artist", "Song", 180000,
@@ -60,6 +66,71 @@ class SpotifyScoringTest(unittest.TestCase):
             track("ander", "Other", "Different", 240000),
         )
         self.assertGreater(exact, afwijkend)
+
+    def test_numerieke_artiestalias(self):
+        self.assertEqual(
+            normaliseer_artiest("30 Seconds To Mars"),
+            normaliseer_artiest("Thirty Seconds To Mars"),
+        )
+        score = bereken_score(
+            "30 Seconds To Mars", "The Kill", None,
+            track("mars", "Thirty Seconds To Mars", "The Kill"),
+        )
+        self.assertFalse(score.rejected)
+        self.assertEqual(score.total, 1.0)
+
+    def test_extra_artiest_en_feat_worden_correct_vergeleken(self):
+        score = bereken_score(
+            "Bob Sinclar feat. Cutee B", "Sound Of Freedom", None,
+            track(
+                "bob", "Bob Sinclar", "Sound Of Freedom",
+                extra_artists=("Cutee B",),
+            ),
+        )
+        self.assertFalse(score.rejected)
+        self.assertEqual(score.primary_artist, 1.0)
+        self.assertEqual(score.extra_artists, 1.0)
+
+    def test_edit_versies_accenten_en_apostroffen_normaliseren(self):
+        self.assertEqual(
+            normaliseer_tekst("Één Melodie (Radio Edit)"),
+            normaliseer_tekst("Een Melodie"),
+        )
+        self.assertEqual(
+            normaliseer_tekst("Track - Single Edit"),
+            normaliseer_tekst("Track"),
+        )
+        self.assertEqual(
+            normaliseer_tekst("Everybody’s Free"),
+            normaliseer_tekst("Everybody's Free"),
+        )
+
+    def test_verkeerde_primaire_artiesten_worden_hard_afgewezen(self):
+        gevallen = (
+            ("Delain", "Madonna", "Frozen"),
+            ("All-Music", "Lil Kleine", "Goud"),
+            ("Eric Van Kleef feat. Boogshe", "Banned Vinyl", "My Ass"),
+        )
+        for lokaal, spotify, titel in gevallen:
+            with self.subTest(lokaal=lokaal, spotify=spotify):
+                score = bereken_score(
+                    lokaal, titel, None,
+                    track("fout", spotify, titel),
+                )
+                self.assertTrue(score.rejected)
+                self.assertEqual(score.total, 0.0)
+
+    def test_hard_afgewezen_kandidaat_wordt_not_found(self):
+        client = FakeSpotifyClient({
+            'artist:"Delain" track:"Frozen"': (
+                track("madonna", "Madonna", "Frozen"),
+            ),
+        })
+        with self.assertLogs("core.spotify.search", level="DEBUG") as logs:
+            match = zoek_beste_match(client, "Delain", "Frozen")
+        self.assertEqual(match.status, NOT_FOUND)
+        self.assertIsNone(match.track)
+        self.assertIn("afgewezen", "\n".join(logs.output))
 
     def test_drie_strategieen_en_hoogste_score_wordt_gekozen(self):
         client = FakeSpotifyClient({
@@ -175,7 +246,7 @@ class SpotifySearchEngineDatabaseTest(unittest.TestCase):
         manual = self._item(None, "Onbekend", "set/manual.mp3")
         client = FakeSpotifyClient({
             'artist:"Artist" track:"Song"': (
-                track("weak", "Different", "Unrelated"),
+                track("weak", "Artist", "Song 2"),
             )
         })
         summary = voer_spotify_search_uit(

@@ -1,4 +1,5 @@
 import json
+import logging
 import sys
 from datetime import datetime
 
@@ -12,15 +13,18 @@ from core.spotify.models import (
     RecoverySetInfo,
     SpotifySearchSummary,
 )
-from core.spotify.scoring import score_track
+from core.spotify.scoring import bereken_score
 
 
-MATCH_THRESHOLD = 0.85
+MATCH_THRESHOLD = 0.95
+LOW_CONFIDENCE_THRESHOLD = 0.90
+MANUAL_REVIEW_THRESHOLD = 0.80
 MAX_SAFE_BATCH = 500
 AUTOMATIC_STATUSES = (
     MATCHED, LOW_CONFIDENCE, NOT_FOUND, MANUAL_REVIEW,
 )
 MANUAL_STATUSES = ("MANUAL", "REVIEWED_NONE")
+LOGGER = logging.getLogger(__name__)
 
 
 class SpotifyRecoverySetError(RuntimeError):
@@ -56,16 +60,40 @@ def zoek_beste_match(client, artiest, titel, duur_ms=None):
     kandidaten = {}
     for methode, query in zoekopdrachten(artiest, titel):
         for track in client.search_tracks(query, limit=20):
-            score = score_track(artiest, titel, duur_ms, track)
+            score = bereken_score(artiest, titel, duur_ms, track)
+            LOGGER.debug(
+                "Spotify-kandidaat %s - %s via %s: "
+                "titel=%.1f artiest=%.1f extra_artiesten=%.1f "
+                "duur=%.1f normalisatie=%.1f totaal=%.1f",
+                ", ".join(track.artists), track.title, methode,
+                score.title * 100, score.primary_artist * 100,
+                score.extra_artists * 100, score.duration * 100,
+                score.normalization * 100, score.total * 100,
+            )
+            if score.rejected:
+                LOGGER.debug(
+                    "Spotify-kandidaat %s afgewezen: %s",
+                    track.track_id, score.rejection_reason,
+                )
+                continue
             bestaand = kandidaten.get(track.track_id)
-            if bestaand is None or score > bestaand[0]:
-                kandidaten[track.track_id] = (score, methode, track)
+            if bestaand is None or score.total > bestaand[0]:
+                kandidaten[track.track_id] = (
+                    score.total, methode, track
+                )
     if not kandidaten:
         return SpotifyMatch(None, None, None, NOT_FOUND)
     score, methode, track = max(
         kandidaten.values(), key=lambda kandidaat: kandidaat[0]
     )
-    status = MATCHED if score >= MATCH_THRESHOLD else LOW_CONFIDENCE
+    if score >= MATCH_THRESHOLD:
+        status = MATCHED
+    elif score >= LOW_CONFIDENCE_THRESHOLD:
+        status = LOW_CONFIDENCE
+    elif score >= MANUAL_REVIEW_THRESHOLD:
+        status = MANUAL_REVIEW
+    else:
+        return SpotifyMatch(None, score, methode, NOT_FOUND)
     return SpotifyMatch(track, score, methode, status)
 
 
