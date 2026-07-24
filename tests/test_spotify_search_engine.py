@@ -91,6 +91,42 @@ class SpotifyScoringTest(unittest.TestCase):
         self.assertEqual(score.primary_artist, 1.0)
         self.assertEqual(score.extra_artists, 1.0)
 
+    def test_praktijkvarianten_worden_als_dezelfde_track_herkend(self):
+        gevallen = (
+            (
+                "Jeroen Van Der Boom", "Een Wereld (Radio Edit)",
+                ("Jeroen Van Der Boom",), "Een Wereld - Radio Edit",
+            ),
+            (
+                "Enrique Iglesias", "Tired Of Being Sorry (Radio Edit)",
+                ("Enrique Iglesias",), "Tired Of Being Sorry",
+            ),
+            (
+                "30 Seconds To Mars", "The Kill",
+                ("Thirty Seconds To Mars",), "The Kill",
+            ),
+            (
+                "Nice 2 Meet", "Divina Conchita",
+                ("Nice2Meet",), "Divina Conchita",
+            ),
+            (
+                "Kelly Rowland feat. Eve", "Like This",
+                ("Kelly Rowland", "Eve"), "Like This",
+            ),
+        )
+        for artiest, titel, spotify_artiesten, spotify_titel in gevallen:
+            with self.subTest(artiest=artiest, titel=titel):
+                kandidaat = SpotifyTrack(
+                    "praktijk", "spotify:track:praktijk",
+                    "https://open.spotify.com/track/praktijk", "Album",
+                    spotify_artiesten, spotify_titel, 180000, 50,
+                )
+                score = bereken_score(
+                    artiest, titel, 180000, kandidaat
+                )
+                self.assertFalse(score.rejected)
+                self.assertGreaterEqual(score.total, .95)
+
     def test_edit_versies_accenten_en_apostroffen_normaliseren(self):
         self.assertEqual(
             normaliseer_tekst("Één Melodie (Radio Edit)"),

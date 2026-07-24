@@ -72,9 +72,21 @@ def _splits_artiesten(artiest):
 
 
 def _heeft_token_overlap(links, rechts):
-    links_tokens = set(normaliseer_artiest(links).split())
-    rechts_tokens = set(normaliseer_artiest(rechts).split())
+    links_norm = normaliseer_artiest(links)
+    rechts_norm = normaliseer_artiest(rechts)
+    if links_norm.replace(" ", "") == rechts_norm.replace(" ", ""):
+        return True
+    links_tokens = set(links_norm.split())
+    rechts_tokens = set(rechts_norm.split())
     return bool(links_tokens & rechts_tokens)
+
+
+def _artiest_overeenkomst(links, rechts):
+    links_norm = normaliseer_artiest(links)
+    rechts_norm = normaliseer_artiest(rechts)
+    if links_norm.replace(" ", "") == rechts_norm.replace(" ", ""):
+        return 1.0
+    return overeenkomst(links_norm, rechts_norm)
 
 
 def _extra_artiest_score(lokale_extras, spotify_artiesten):
@@ -85,7 +97,7 @@ def _extra_artiest_score(lokale_extras, spotify_artiesten):
         return 0.0
     return sum(
         max(
-            overeenkomst(extra, kandidaat, normaliseer_artiest)
+            _artiest_overeenkomst(extra, kandidaat)
             for kandidaat in kandidaten
         )
         for extra in lokale_extras
@@ -102,8 +114,8 @@ def _duur_score(lokale_duur, spotify_duur):
 def bereken_score(artiest, titel, duur_ms, track: SpotifyTrack):
     primaire_artiest, extra_artiesten = _splits_artiesten(artiest)
     spotify_primair = track.artists[0] if track.artists else ""
-    artiest_score = overeenkomst(
-        primaire_artiest, spotify_primair, normaliseer_artiest
+    artiest_score = _artiest_overeenkomst(
+        primaire_artiest, spotify_primair
     )
     artiest_afgewezen = (
         artiest_score < PRIMARY_ARTIST_MINIMUM
