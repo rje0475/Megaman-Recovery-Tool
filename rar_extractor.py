@@ -127,7 +127,7 @@ def voer_extractie_uit(
     tool=None,
     runner=subprocess.run,
 ):
-    """Pak COMPLETE multipart-RAR-sets uit vanaf hun part01-volume."""
+    """Pak COMPLETE multipart-RAR-sets uit vanaf hun eerste part-volume."""
 
     uitvoer = uitvoer or sys.stdout
     bronmap = Path(bronmap).resolve()

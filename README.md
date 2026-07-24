@@ -205,7 +205,7 @@ altijd zoveel mogelijk bestanden uit:
 ```powershell
 python main.py --salvage-rar "C:\downloads"
 python main.py --salvage-rar "C:\downloads" --workspace "D:\recovery"
-python main.py --salvage-rar "C:\downloads" --rar-set "megaman2006"
+python main.py --salvage-rar "C:\downloads" --rar-set "Jaarcollectie1999"
 python main.py --salvage-rar "C:\downloads" --skip-par2 --skip-winrar
 ```
 

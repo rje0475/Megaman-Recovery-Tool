@@ -11,6 +11,7 @@ from paden import normaliseer_relatief_pad
 from paden import normaliseer_relatief_pad_sleutel
 from rar_inventory import RarListingResultaat
 from rar_inventory import groepeer_rar_sets
+from rar import zoek_part01_bestanden
 from rar_inventory import parseer_7zip_listing
 from rar_inventory import voer_rar_inventory_uit
 
@@ -86,6 +87,21 @@ class ListingParserTest(unittest.TestCase):
 
 
 class RarGroeperingTest(unittest.TestCase):
+    def test_analyse_vindt_eerste_volume_met_variabele_partbreedte(self):
+        with tempfile.TemporaryDirectory() as tijdelijke_map:
+            root = Path(tijdelijke_map)
+            for naam in (
+                "Collectie.part1.rar",
+                "Andere Naam.part001.RAR",
+                "Collectie.part2.rar",
+                "backup.part01.old",
+            ):
+                (root / naam).write_bytes(b"")
+            self.assertEqual(
+                [pad.name for pad in zoek_part01_bestanden(root)],
+                ["Andere Naam.part001.RAR", "Collectie.part1.rar"],
+            )
+
     def test_groepeert_multipart_sets_vanaf_part01(self):
         with tempfile.TemporaryDirectory() as tijdelijke_map:
             root = Path(tijdelijke_map)
@@ -113,6 +129,38 @@ class RarGroeperingTest(unittest.TestCase):
                     "album.part01.rar",
                     "album.part02.rar",
                     "album.part03.rar",
+                ],
+            )
+
+    def test_setnaam_en_partbreedte_worden_dynamisch_afgeleid(self):
+        with tempfile.TemporaryDirectory() as tijdelijke_map:
+            root = Path(tijdelijke_map)
+            for namen in (
+                ("Megaman2012.part1.rar", "Megaman2012.part2.rar"),
+                (
+                    "Jaarcollectie1999.part01.rar",
+                    "Jaarcollectie1999.part02.rar",
+                ),
+                ("Andere Naam.part001.rar", "Andere Naam.part002.rar"),
+            ):
+                for naam in namen:
+                    (root / naam).write_bytes(b"")
+
+            rar_sets = groepeer_rar_sets(root)
+
+            self.assertEqual(
+                [rar_set.rar_set_key for rar_set in rar_sets],
+                ["andere naam", "jaarcollectie1999", "megaman2012"],
+            )
+            self.assertEqual(
+                [[pad.name for pad in rar_set.volumes] for rar_set in rar_sets],
+                [
+                    ["Andere Naam.part001.rar", "Andere Naam.part002.rar"],
+                    [
+                        "Jaarcollectie1999.part01.rar",
+                        "Jaarcollectie1999.part02.rar",
+                    ],
+                    ["Megaman2012.part1.rar", "Megaman2012.part2.rar"],
                 ],
             )
 
