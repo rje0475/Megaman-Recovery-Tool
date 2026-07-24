@@ -1,3 +1,4 @@
+import re
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -6,6 +7,40 @@ from paden import normaliseer_relatief_pad_sleutel
 
 
 DATABASE_BESTAND = Path("megaman_recovery.db")
+
+
+def leid_archive_set_name_af(archive_name):
+    naam = Path(str(archive_name)).name
+    naam = re.sub(r"(?i)\.part0*1\.rar$", "", naam)
+    naam = re.sub(r"(?i)\.rar$", "", naam)
+    return naam
+
+
+def verkrijg_of_maak_recovery_set(database, archive_name, archive_set_name=None):
+    archive_name = Path(str(archive_name)).name
+    archive_set_name = (
+        str(archive_set_name).strip()
+        if archive_set_name
+        else leid_archive_set_name_af(archive_name)
+    )
+    nu = datetime.now().isoformat(timespec="seconds")
+    database.verbinding.execute(
+        """
+        INSERT INTO recovery_sets (
+          archive_name, archive_set_name, created_at, updated_at
+        ) VALUES (?, ?, ?, ?)
+        ON CONFLICT (archive_set_name) DO UPDATE SET
+          archive_name=excluded.archive_name,
+          updated_at=excluded.updated_at
+        """,
+        (archive_name, archive_set_name, nu, nu),
+    )
+    rij = database.verbinding.execute(
+        "SELECT id FROM recovery_sets WHERE archive_set_name=?",
+        (archive_set_name,),
+    ).fetchone()
+    database.verbinding.commit()
+    return rij["id"]
 
 
 class SQLiteDatabase:
@@ -184,6 +219,19 @@ class SQLiteDatabase:
             "identiteit_bepaald_op": "TEXT",
             "identiteit_bron_handtekening": "TEXT",
             "identiteit_reden": "TEXT",
+            "recovery_set_id": "INTEGER",
+            "spotify_track_id": "TEXT",
+            "spotify_uri": "TEXT",
+            "spotify_url": "TEXT",
+            "spotify_album": "TEXT",
+            "spotify_artists": "TEXT",
+            "spotify_title": "TEXT",
+            "spotify_duration_ms": "INTEGER",
+            "spotify_popularity": "INTEGER",
+            "spotify_confidence": "REAL",
+            "spotify_search_method": "TEXT",
+            "spotify_status": "TEXT",
+            "spotify_last_checked": "TEXT",
         }
 
         for kolom, kolomtype in recovery_migraties.items():
@@ -192,6 +240,17 @@ class SQLiteDatabase:
                     f"ALTER TABLE recovery_items "
                     f"ADD COLUMN {kolom} {kolomtype}"
                 )
+        self.verbinding.execute(
+            """
+            CREATE TABLE IF NOT EXISTS recovery_sets (
+                id INTEGER PRIMARY KEY,
+                archive_name TEXT NOT NULL,
+                archive_set_name TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
         self.verbinding.execute(
             """
             CREATE TABLE IF NOT EXISTS recovery_provider_resultaten (
@@ -432,12 +491,51 @@ class SQLiteDatabase:
             "damaged_count": "INTEGER NOT NULL DEFAULT 0",
             "ffmpeg_error_count": "INTEGER NOT NULL DEFAULT 0",
             "deduplicated_count": "INTEGER NOT NULL DEFAULT 0",
+            "recovery_set_id": "INTEGER",
         }
         for kolom, definitie in salvage_migraties.items():
             if kolom not in salvage_kolommen:
                 self.verbinding.execute(
                     f"ALTER TABLE salvage_runs ADD COLUMN {kolom} {definitie}"
                 )
+        oude_runs = self.verbinding.execute(
+            """
+            SELECT run.id, run.rar_set_key, sets.rar_startbestand
+            FROM salvage_runs run
+            LEFT JOIN rar_sets sets ON sets.rar_set_key=run.rar_set_key
+            WHERE run.recovery_set_id IS NULL
+            """
+        ).fetchall()
+        for run in oude_runs:
+            if not run["rar_startbestand"]:
+                continue
+            archive_name = Path(run["rar_startbestand"]).name
+            archive_set_name = leid_archive_set_name_af(archive_name)
+            nu = datetime.now().isoformat(timespec="seconds")
+            self.verbinding.execute(
+                """
+                INSERT INTO recovery_sets (
+                  archive_name, archive_set_name, created_at, updated_at
+                ) VALUES (?, ?, ?, ?)
+                ON CONFLICT (archive_set_name) DO NOTHING
+                """,
+                (archive_name, archive_set_name, nu, nu),
+            )
+            recovery_set_id = self.verbinding.execute(
+                "SELECT id FROM recovery_sets WHERE archive_set_name=?",
+                (archive_set_name,),
+            ).fetchone()["id"]
+            self.verbinding.execute(
+                "UPDATE salvage_runs SET recovery_set_id=? WHERE id=?",
+                (recovery_set_id, run["id"]),
+            )
+            self.verbinding.execute(
+                """
+                UPDATE recovery_items SET recovery_set_id=?
+                WHERE rar_set_key=? AND recovery_set_id IS NULL
+                """,
+                (recovery_set_id, run["rar_set_key"]),
+            )
         self.verbinding.execute(
             """
             CREATE TABLE IF NOT EXISTS salvage_file_results (

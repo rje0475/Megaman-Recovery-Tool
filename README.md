@@ -237,3 +237,22 @@ recovery-items, ook wanneer het bestand wel in `extracted` staat.
 
 De volledige vergelijking blijft in SQLite; console en GUI tonen compacte
 aantallen. Handmatige Spotify-keuzes blijven behouden.
+
+# Spotify Search Engine (fase 1)
+
+De geïsoleerde backend in `core/spotify` zoekt recovery-items uitsluitend via
+de officiële Spotify Web API. Configureer lokaal:
+
+```powershell
+$env:SPOTIFY_CLIENT_ID="..."
+$env:SPOTIFY_CLIENT_SECRET="..."
+$env:SPOTIFY_MARKET="NL"
+```
+
+De engine probeert achtereenvolgens een veldzoekopdracht, artiest plus titel
+en alleen titel. Alle kandidaten worden genormaliseerd en gescoord op artiest,
+titel en, wanneer lokaal leesbaar, duur. Alleen de hoogste score wordt op het
+recovery-item opgeslagen als `MATCHED`, `LOW_CONFIDENCE`, `NOT_FOUND` of
+`MANUAL_REVIEW`.
+
+Deze fase maakt geen playlists, wijzigt geen GUI en downloadt geen media.

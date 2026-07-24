@@ -29,6 +29,7 @@ from core.winrar_recovery import (
     voer_winrar_recovery_uit,
 )
 from database import (
+    SQLiteDatabase,
     bewaar_rar_set,
     maak_database,
     vervang_rar_inventory_items,
@@ -752,6 +753,25 @@ class OrchestratorTest(unittest.TestCase):
             )
             self.assertEqual(resultaat[0].eindstatus, "SALVAGED")
             self.assertEqual(resultaat[0].spotify_recovery_items, 0)
+            controle = SQLiteDatabase(db_pad)
+            try:
+                run = controle.verbinding.execute(
+                    "SELECT recovery_set_id FROM salvage_runs ORDER BY id DESC"
+                ).fetchone()
+                recovery_set = controle.verbinding.execute(
+                    "SELECT * FROM recovery_sets WHERE id=?",
+                    (run["recovery_set_id"],),
+                ).fetchone()
+                self.assertEqual(
+                    recovery_set["archive_name"],
+                    "Willekeurige Collectie.part01.rar",
+                )
+                self.assertEqual(
+                    recovery_set["archive_set_name"],
+                    "Willekeurige Collectie",
+                )
+            finally:
+                controle.sluit()
             tekst = log.getvalue()
             for fase in (
                 "Salvage-workflow gestart",
