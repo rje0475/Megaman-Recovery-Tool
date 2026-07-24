@@ -17,6 +17,7 @@ from core.spotify.scoring import (
     normaliseer_tekst,
     score_track,
 )
+from core.spotify.parsing import parseer_recovery_itemnaam
 from core.spotify.search import (
     SpotifyRecoverySetError,
     beschikbare_recovery_sets,
@@ -52,6 +53,62 @@ def track(
 
 
 class SpotifyScoringTest(unittest.TestCase):
+    def test_hitlijstcodes_worden_centraal_voor_query_en_matching_verwijderd(self):
+        gevallen = (
+            (
+                "07050090 Delain - Frozen",
+                "Delain", "Frozen", "07050090",
+            ),
+            (
+                "07280058 Natasha Bedingfield - Soulmate",
+                "Natasha Bedingfield", "Soulmate", "07280058",
+            ),
+            (
+                "07110066 30 Seconds To Mars - The Kill (Bury Me)",
+                "30 Seconds To Mars", "The Kill (Bury Me)", "07110066",
+            ),
+            (
+                "07470009 Jeroen Van Der Boom - Een Wereld (Radio Edit)",
+                "Jeroen Van Der Boom", "Een Wereld (Radio Edit)",
+                "07470009",
+            ),
+        )
+        for origineel, artiest, titel, code in gevallen:
+            with self.subTest(origineel=origineel):
+                parsed = parseer_recovery_itemnaam(
+                    origineel, f"{code} {artiest}", titel
+                )
+                self.assertEqual(parsed.chart_code, code)
+                self.assertEqual(parsed.artist, artiest)
+                self.assertEqual(parsed.title, titel)
+                self.assertEqual(
+                    parsed.free_query, f"{artiest} {titel}"
+                )
+                client = FakeSpotifyClient()
+                match = zoek_beste_match(
+                    client, f"{code} {artiest}", titel
+                )
+                self.assertEqual(match.status, NOT_FOUND)
+                self.assertEqual(
+                    client.queries[1][0], f"{artiest} {titel}"
+                )
+                self.assertTrue(
+                    all(code not in query for query, _ in client.queries)
+                )
+
+    def test_cijfers_worden_niet_middenin_of_als_jaartal_verwijderd(self):
+        gevallen = (
+            "Prince - 1999",
+            "U2 - One",
+            "2007 - Track",
+            "Artist - 07050090 Reasons",
+            "30 Seconds To Mars - The Kill",
+        )
+        for naam in gevallen:
+            with self.subTest(naam=naam):
+                parsed = parseer_recovery_itemnaam(naam)
+                self.assertIsNone(parsed.chart_code)
+
     def test_normalisatie_en_duur_beinvloeden_score(self):
         self.assertEqual(
             normaliseer_tekst("Beyoncé feat. Jay-Z"),

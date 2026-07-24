@@ -13,6 +13,7 @@ from core.spotify.models import (
     RecoverySetInfo,
     SpotifySearchSummary,
 )
+from core.spotify.parsing import parseer_recovery_itemnaam
 from core.spotify.scoring import bereken_score
 
 
@@ -49,6 +50,10 @@ def _lokale_duur_ms(bestand):
 
 
 def zoekopdrachten(artiest, titel):
+    parsed = parseer_recovery_itemnaam(
+        f"{artiest} - {titel}", artiest, titel
+    )
+    artiest, titel = parsed.artist, parsed.title
     return (
         ("FIELD_FILTERS", f'artist:"{artiest}" track:"{titel}"'),
         ("ARTIST_TITLE", f"{artiest} {titel}".strip()),
@@ -57,6 +62,10 @@ def zoekopdrachten(artiest, titel):
 
 
 def zoek_beste_match(client, artiest, titel, duur_ms=None):
+    parsed = parseer_recovery_itemnaam(
+        f"{artiest} - {titel}", artiest, titel
+    )
+    artiest, titel = parsed.artist, parsed.title
     kandidaten = {}
     for methode, query in zoekopdrachten(artiest, titel):
         for track in client.search_tracks(query, limit=20):
@@ -259,8 +268,12 @@ def voer_spotify_search_uit(
         NOT_FOUND: 0, MANUAL_REVIEW: 0,
     }
     for item in items:
-        artiest = (item["bepaalde_artiest"] or "").strip()
-        titel = (item["bepaalde_titel"] or "").strip()
+        parsed = parseer_recovery_itemnaam(
+            item["verwacht_rel_pad"],
+            item["bepaalde_artiest"],
+            item["bepaalde_titel"],
+        )
+        artiest, titel = parsed.artist, parsed.title
         uitvoer.write(f"\nSpotify zoeken:\n{artiest} - {titel}\n")
         if not artiest or not titel:
             match = SpotifyMatch(None, None, None, MANUAL_REVIEW)
