@@ -14,6 +14,7 @@ import cli
 from gui import GuiDependencyFout
 from gui.main_window import MegamanMainWindow
 from gui.workers import ActionWorker
+from core.salvage_workflow import voer_salvage_workflow_uit
 
 
 LEGE_STATISTIEKEN = {
@@ -179,6 +180,35 @@ class MainWindowTest(unittest.TestCase):
                 self.venster._pak_uit()
         vraag.assert_called_once()
         self.assertEqual(_FakeWorker.instances, [])
+
+    def test_salvage_vraagt_bevestiging(self):
+        with tempfile.TemporaryDirectory() as tijdelijke_map:
+            self.venster.map_invoer.setText(tijdelijke_map)
+            with patch.object(
+                QMessageBox, "question",
+                return_value=QMessageBox.StandardButton.No,
+            ) as vraag:
+                self.venster._salvage()
+        vraag.assert_called_once()
+        self.assertIn("Originele archieven", vraag.call_args.args[2])
+        self.assertEqual(_FakeWorker.instances, [])
+
+    def test_salvage_worker_krijgt_bronmap_en_aparte_workspace(self):
+        with tempfile.TemporaryDirectory(
+            prefix="4fe20a6a4f204822ed17e88d.#2."
+        ) as tijdelijke_map:
+            bronmap = Path(tijdelijke_map).resolve()
+            self.venster.map_invoer.setText(str(bronmap))
+            with patch.object(
+                QMessageBox, "question",
+                return_value=QMessageBox.StandardButton.Yes,
+            ):
+                self.venster._salvage()
+        self.assertEqual(len(_FakeWorker.instances), 1)
+        worker = _FakeWorker.instances[0]
+        self.assertIs(worker.actie, voer_salvage_workflow_uit)
+        self.assertEqual(worker.args[0], bronmap)
+        self.assertEqual(worker.args[1], bronmap / "megaman_salvage")
 
     def test_knoppen_tijdens_actie_uit_en_daarna_aan(self):
         toestanden = []

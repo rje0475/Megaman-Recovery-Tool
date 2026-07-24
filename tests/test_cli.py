@@ -22,6 +22,7 @@ class CliTest(unittest.TestCase):
         self.assertIn("--repair", uitvoer.getvalue())
         self.assertIn("--spotify-search", uitvoer.getvalue())
         self.assertIn("--spotify-retry", uitvoer.getvalue())
+        self.assertIn("--salvage-rar", uitvoer.getvalue())
         self.assertIn("Voorbeelden:", uitvoer.getvalue())
         self.assertIn("zonder bestanden te repareren", uitvoer.getvalue())
 
@@ -216,6 +217,40 @@ class CliTest(unittest.TestCase):
         )
         self.assertEqual(code, 1)
         self.assertIn("Spotify-map bestaat niet", uitvoer.getvalue())
+        self.assertNotIn("Traceback", uitvoer.getvalue())
+
+    def test_salvage_cli_opties_en_exitcodes(self):
+        for status, code in (
+            ("COMPLETE", 0), ("SALVAGED", 0),
+            ("PARTIAL", 1), ("FAILED", 2),
+        ):
+            with self.subTest(status=status):
+                resultaat = Mock(eindstatus=status)
+                with patch(
+                    "core.salvage_workflow.voer_salvage_workflow_uit",
+                    return_value=(resultaat,),
+                ) as workflow:
+                    werkelijk = cli.main([
+                        "--salvage-rar", ".",
+                        "--workspace", "werk map",
+                        "--rar-set", "set",
+                        "--skip-par2", "--skip-winrar", "--no-spotify",
+                    ], uitvoer=io.StringIO())
+                self.assertEqual(werkelijk, code)
+                workflow.assert_called_once_with(
+                    Path("."), workspace=Path("werk map"), rar_set="set",
+                    skip_par2=True, skip_winrar=True, no_spotify=True,
+                    uitvoer=unittest.mock.ANY,
+                )
+
+    def test_salvage_niet_bestaande_map_geeft_nette_fout(self):
+        uitvoer = io.StringIO()
+        code = cli.main(
+            ["--salvage-rar", r"Z:\bestaat\beslist\niet"],
+            uitvoer=uitvoer,
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("Bronmap bestaat niet", uitvoer.getvalue())
         self.assertNotIn("Traceback", uitvoer.getvalue())
 
     def test_ontbrekende_repair_tool_crasht_cli_niet(self):

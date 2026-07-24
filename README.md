@@ -195,3 +195,100 @@ overschreven. De tool gebruikt bewust geen YouTube: benamingen en versies zijn
 daarvoor onvoldoende betrouwbaar. Spotify-kandidaten, scores, zoekopdrachten
 en keuzes blijven lokaal in SQLite; credentials worden niet opgeslagen of
 gelogd. Deze workflow wijzigt geen MP3-bestanden.
+
+# Fouttolerante RAR-salvage
+
+`NOT_REPAIRABLE` betekent niet dat niets meer gered kan worden. Na PAR2
+probeert de salvage-workflow zo nodig non-interactieve RAR/WinRAR-recovery.
+Daarna probeert eerst RAR/WinRAR en vervolgens 7-Zip fouttolerant uit te
+pakken. De tweede poging vult de bestaande uitvoer aan en verwijdert geen
+bestanden uit de eerste poging:
+
+```powershell
+python main.py --salvage-rar "C:\downloads"
+python main.py --salvage-rar "C:\downloads" --workspace "D:\recovery"
+python main.py --salvage-rar "C:\downloads" --rar-set "Jaarcollectie1999"
+python main.py --salvage-rar "C:\downloads" --skip-par2 --skip-winrar
+```
+
+Stel afwijkende toolpaden in met `WINRAR_PATH` en `SEVENZIP_PATH`. Voor
+RAR/WinRAR heeft de consoletool `Rar.exe` de voorkeur. Anders worden
+standaardinstallaties en daarna PATH doorzocht. Iedere recovery-poging krijgt
+een eigen runmap onder `recovery`; de samengevoegde uitvoer blijft in
+`extracted`. Bestaande salvage-output en originele RAR-volumes worden nooit
+verwijderd of overschreven.
+
+Rebuilt/repaired multipart-sets worden als `COMPLETE`, `PARTIAL`,
+`SINGLE_VOLUME` of `INVALID` geclassificeerd. Iedere bruikbare herstelde bron
+wordt met beide tools geprobeerd, maar vervangt de originele set nooit: ook de
+originele volumes krijgen altijd beide extractiepogingen. Exitcode 0 bepaalt
+niet de eindstatus; de vergelijking met de verwachte MP3-inventaris doet dat.
+
+De eindclassificatie combineert deze vergelijking met opgeslagen
+FFmpeg-validatiefouten en 0-byte-feiten op genormaliseerd relatief pad.
+`Fysiek aanwezig` betekent daarom niet automatisch `volledig goed`:
+FFmpeg-fouten, nul-byte en andere onleesbare bestanden blijven unieke
+recovery-items, ook wanneer het bestand wel in `extracted` staat.
+
+- `COMPLETE`: alle verwachte MP3’s zijn bruikbaar.
+- `SALVAGED`: niet volledig gerepareerd, maar alle MP3’s zijn gered.
+- `PARTIAL`: een deel is gered en recovery-items zijn nodig.
+- `FAILED`: niets bruikbaars kon worden uitgepakt.
+
+De volledige vergelijking blijft in SQLite; console en GUI tonen compacte
+aantallen. Handmatige Spotify-keuzes blijven behouden.
+
+# Spotify Search Engine (fase 1)
+
+De geïsoleerde backend in `core/spotify` zoekt recovery-items uitsluitend via
+de officiële Spotify Web API. Configureer lokaal:
+
+```powershell
+$env:SPOTIFY_CLIENT_ID="..."
+$env:SPOTIFY_CLIENT_SECRET="..."
+$env:SPOTIFY_MARKET="NL"
+```
+
+De engine probeert achtereenvolgens een veldzoekopdracht, artiest plus titel
+en alleen titel. Alle kandidaten worden genormaliseerd en gescoord op artiest,
+titel en, wanneer lokaal leesbaar, duur. Alleen de hoogste score wordt op het
+recovery-item opgeslagen als `MATCHED`, `LOW_CONFIDENCE`, `NOT_FOUND` of
+`MANUAL_REVIEW`.
+
+De zoekfase wijzigt geen playlists, GUI of mediabestanden.
+
+De zoekengine verwerkt altijd precies één recovery-set. Geef bij voorkeur
+`recovery_set_id` of `archive_set_name` door; zonder selectie wordt alleen de
+meest recent bijgewerkte geldige set gekozen. Reeds automatisch verwerkte
+items worden standaard overgeslagen en zijn met `force=True` opnieuw te
+zoeken. Handmatige keuzes worden nooit overschreven. Batches boven 500 items
+vereisen expliciet `allow_large_batch=True`.
+
+```python
+voer_spotify_search_uit(
+    database,
+    archive_set_name="Jaarcollectie",
+    force=False,
+    allow_large_batch=False,
+)
+```
+
+# Spotify Playlist Manager
+
+Playlistbeheer gebruikt dezelfde Spotify-client, maar vereist daarnaast een
+OAuth-gebruikerstoken met de scopes `playlist-read-private` en
+`playlist-modify-private`:
+
+```powershell
+$env:SPOTIFY_ACCESS_TOKEN="..."
+```
+
+`sync_playlist` werkt altijd op één expliciet geselecteerde recovery-set. De
+functie hergebruikt eerst de opgeslagen playlist-ID, zoekt anders in de
+playlists van de huidige gebruiker naar exact dezelfde naam en maakt als
+laatste mogelijkheid een privéplaylist. Alleen unieke recovery-items met
+status `MATCHED` worden toegevoegd; opnieuw uitvoeren is veilig.
+
+```python
+sync_playlist(database, archive_set_name="Jaarcollectie")
+```
