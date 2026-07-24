@@ -41,10 +41,13 @@ class SalvageFout(RuntimeError):
     pass
 
 
-def ontdek_archive_sets(bronmap):
+def ontdek_archive_sets(bronmap, exclude=None):
     bronmap = Path(bronmap)
+    exclude = Path(exclude).resolve() if exclude else None
     sets, gebruikt = [], set()
     for bestand in sorted(bronmap.rglob("*.rar")):
+        if exclude and bestand.resolve().is_relative_to(exclude):
+            continue
         naam = bestand.name.casefold()
         part = re.match(r"(.+)\.part(\d+)\.rar$", naam)
         if part and int(part.group(2)) != 1:
@@ -215,7 +218,7 @@ def voer_salvage_workflow_uit(
         Path(workspace).resolve() if workspace
         else bronmap / "megaman_salvage"
     )
-    sets = ontdek_archive_sets(bronmap)
+    sets = ontdek_archive_sets(bronmap, exclude=workspace)
     if rar_set:
         sets = tuple(s for s in sets if s.sleutel.casefold() == rar_set.casefold())
     if not sets:
