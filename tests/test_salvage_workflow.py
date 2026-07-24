@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -12,6 +13,9 @@ from core.salvage_compare import (
 )
 from core.salvage_extractor import salvage_extract
 from core.salvage_workflow import (
+    ArchiveSet,
+    SalvageFout,
+    _resolveer_set_volumes,
     _synchroniseer_recovery,
     ontdek_archive_sets,
     voer_salvage_workflow_uit,
@@ -217,6 +221,108 @@ class RecoverySynchronisatieTest(unittest.TestCase):
 
 
 class OrchestratorTest(unittest.TestCase):
+    def test_model_met_82_part_volumes_blijft_compleet(self):
+        with tempfile.TemporaryDirectory() as tijdelijke_map:
+            root = Path(tijdelijke_map)
+            volumes = []
+            for nummer in range(1, 83):
+                volume = root / f"Megaman2006.part{nummer:02d}.rar"
+                volume.write_bytes(b"x")
+                volumes.append(volume)
+            set_ = ArchiveSet("megaman2006", volumes[0], tuple(volumes))
+            resultaat = _resolveer_set_volumes(
+                set_, root, root / "megaman_salvage", StringIO()
+            )
+            self.assertEqual(len(resultaat.volumes), 82)
+            self.assertEqual(resultaat.volumes[0].name,
+                             "Megaman2006.part01.rar")
+            self.assertEqual(resultaat.volumes[-1].name,
+                             "Megaman2006.part82.rar")
+
+    def test_leeg_model_vindt_82_part_volumes_met_fallbackscan(self):
+        with tempfile.TemporaryDirectory() as tijdelijke_map:
+            root = Path(tijdelijke_map)
+            for nummer in range(1, 83):
+                (root / f"Megaman2006.part{nummer:02d}.rar").write_bytes(b"x")
+            log = StringIO()
+            resultaat = _resolveer_set_volumes(
+                ArchiveSet("megaman2006", root / "Megaman2006.part01.rar", ()),
+                root, root / "megaman_salvage", log,
+            )
+            self.assertEqual(len(resultaat.volumes), 82)
+            self.assertIn("model=0", log.getvalue())
+            self.assertIn("fallback=82", log.getvalue())
+
+    def test_leeg_model_gebruikt_fallback_en_negeert_old_en_workspace(self):
+        with tempfile.TemporaryDirectory(
+            prefix="4fe20a6a4f204822ed17e88d.#2."
+        ) as tijdelijke_map:
+            root = Path(tijdelijke_map)
+            for naam in (
+                "Megaman2006.part01.rar",
+                "Megaman2006.part02.rar",
+                "Megaman2006.part07.old",
+                "Megaman2006.part07.rar",
+                "Megaman2006.part17.old",
+                "Megaman2006.part17.rar",
+                "Megaman2006.part82.rar",
+                "Megaman2006.par2",
+            ):
+                (root / naam).write_bytes(b"x")
+            workspace = root / "megaman_salvage"
+            workspace.mkdir()
+            (workspace / "Megaman2006.part03.rar").write_bytes(b"x")
+            log = StringIO()
+            resultaat = _resolveer_set_volumes(
+                ArchiveSet(
+                    "MEGAMAN2006", root / "MEGAMAN2006.PART01.RAR", ()
+                ),
+                root, workspace, log,
+            )
+            self.assertEqual(
+                [pad.name for pad in resultaat.volumes],
+                [
+                    "Megaman2006.part01.rar",
+                    "Megaman2006.part02.rar",
+                    "Megaman2006.part07.rar",
+                    "Megaman2006.part17.rar",
+                    "Megaman2006.part82.rar",
+                ],
+            )
+            self.assertIn("fallback=5", log.getvalue())
+            self.assertIn(".old genegeerd=2", log.getvalue())
+            self.assertIn(f"bronmap={root.resolve()}", log.getvalue())
+
+    def test_part_volumes_worden_numeriek_en_case_insensitive_gevonden(self):
+        with tempfile.TemporaryDirectory() as tijdelijke_map:
+            root = Path(tijdelijke_map)
+            for naam in (
+                "MegaMan.PART10.RAR",
+                "MegaMan.PART02.RAR",
+                "MegaMan.PART01.RAR",
+            ):
+                (root / naam).write_bytes(b"x")
+            sets = ontdek_archive_sets(root)
+            self.assertEqual(
+                [pad.name for pad in sets[0].volumes],
+                ["MegaMan.PART01.RAR", "MegaMan.PART02.RAR",
+                 "MegaMan.PART10.RAR"],
+            )
+
+    def test_pas_na_lege_fallback_wordt_volume_fout_gegeven(self):
+        with tempfile.TemporaryDirectory() as tijdelijke_map:
+            root = Path(tijdelijke_map)
+            log = StringIO()
+            with self.assertRaisesRegex(
+                SalvageFout, "RAR-set bevat geen volumes"
+            ):
+                _resolveer_set_volumes(
+                    ArchiveSet("megaman2006", root / "missing.part01.rar", ()),
+                    root, root / "megaman_salvage", log,
+                )
+            self.assertIn("model=0", log.getvalue())
+            self.assertIn("fallback=0", log.getvalue())
+
     def test_not_repairable_gaat_door_naar_winrar_en_7zip(self):
         with tempfile.TemporaryDirectory() as tijdelijke_map:
             root = Path(tijdelijke_map)

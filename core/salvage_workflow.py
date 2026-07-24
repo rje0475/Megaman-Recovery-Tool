@@ -10,6 +10,7 @@ from core.salvage_extractor import salvage_extract
 from core.winrar_recovery import voer_winrar_recovery_uit
 from database import DATABASE_BESTAND, SQLiteDatabase
 from paden import normaliseer_relatief_pad_sleutel
+from rar_inventory import groepeer_rar_sets
 
 
 @dataclass(frozen=True)
@@ -45,35 +46,135 @@ def ontdek_archive_sets(bronmap, exclude=None):
     bronmap = Path(bronmap)
     exclude = Path(exclude).resolve() if exclude else None
     sets, gebruikt = [], set()
-    for bestand in sorted(bronmap.rglob("*.rar")):
-        if exclude and bestand.resolve().is_relative_to(exclude):
+
+    for rar_set in groepeer_rar_sets(bronmap):
+        volumes = tuple(
+            volume.resolve()
+            for volume in rar_set.volumes
+            if not _is_uitgesloten_volume(volume, exclude)
+        )
+        if not volumes:
             continue
-        naam = bestand.name.casefold()
-        part = re.match(r"(.+)\.part(\d+)\.rar$", naam)
-        if part and int(part.group(2)) != 1:
+        main_archive = rar_set.startbestand.resolve()
+        gebruikt.update(volumes)
+        sets.append(ArchiveSet(
+            rar_set.rar_set_key, main_archive, volumes
+        ))
+
+    oud_pattern = re.compile(r"^(?P<naam>.+)\.rar$", re.IGNORECASE)
+    volume_pattern = re.compile(r"^(?P<naam>.+)\.r(?P<deel>\d+)$", re.IGNORECASE)
+    for bestand in bronmap.rglob("*"):
+        if not bestand.is_file() or _is_uitgesloten_volume(bestand, exclude):
             continue
-        if part:
-            prefix = part.group(1)
-            volumes = tuple(sorted(
-                bestand.parent.glob(f"{bestand.name[:-10]}.part*.rar"),
-                key=lambda p: p.name.casefold(),
-            ))
-            basis = bestand.relative_to(bronmap).with_name(prefix)
-        else:
-            if bestand in gebruikt:
-                continue
-            rvolumes = sorted(
-                bestand.parent.glob(f"{bestand.stem}.r[0-9][0-9]"),
-                key=lambda p: p.name.casefold(),
-            )
-            volumes = (bestand, *rvolumes)
-            basis = bestand.relative_to(bronmap).with_suffix("")
+        match = oud_pattern.match(bestand.name)
+        if not match or bestand.resolve() in gebruikt:
+            continue
+        naam = match.group("naam")
+        rvolumes = []
+        for kandidaat in bestand.parent.iterdir():
+            volume_match = volume_pattern.match(kandidaat.name)
+            if (
+                kandidaat.is_file()
+                and volume_match
+                and volume_match.group("naam").casefold() == naam.casefold()
+                and not _is_uitgesloten_volume(kandidaat, exclude)
+            ):
+                rvolumes.append(kandidaat.resolve())
+        volumes = (bestand.resolve(), *sorted(
+            rvolumes, key=_volume_sorteersleutel
+        ))
+        basis = bestand.relative_to(bronmap).with_suffix("")
         gebruikt.update(volumes)
         sets.append(ArchiveSet(
             normaliseer_relatief_pad_sleutel(basis),
-            bestand.resolve(), tuple(p.resolve() for p in volumes),
+            bestand.resolve(), volumes,
         ))
-    return tuple(sets)
+    return tuple(sorted(sets, key=lambda item: item.sleutel.casefold()))
+
+
+def _is_uitgesloten_volume(pad, exclude=None):
+    pad = Path(pad)
+    naam = pad.name.casefold()
+    if naam.endswith(".old") or naam.startswith(("rebuilt.", "repaired.")):
+        return True
+    if exclude:
+        try:
+            return pad.resolve().is_relative_to(Path(exclude).resolve())
+        except (OSError, ValueError):
+            return False
+    return False
+
+
+def _volume_sorteersleutel(pad):
+    naam = Path(pad).name
+    part = re.search(r"\.part(\d+)\.rar$", naam, re.IGNORECASE)
+    if part:
+        return (0, int(part.group(1)), naam.casefold())
+    oud = re.search(r"\.r(\d+)$", naam, re.IGNORECASE)
+    if oud:
+        return (1, int(oud.group(1)) + 1, naam.casefold())
+    return (1, 0, naam.casefold())
+
+
+def _resolveer_set_volumes(set_, bronmap, workspace, uitvoer):
+    bronmap = Path(bronmap).resolve()
+    workspace = Path(workspace).resolve()
+    model_volumes = tuple(set_.volumes or ())
+    bruikbaar = []
+    for volume in model_volumes:
+        volume = Path(volume)
+        if not volume.is_absolute():
+            volume = bronmap / volume
+        if volume.is_file() and not _is_uitgesloten_volume(volume, workspace):
+            bruikbaar.append(volume.resolve())
+    bruikbaar = tuple(sorted(set(bruikbaar), key=_volume_sorteersleutel))
+
+    opnieuw = ontdek_archive_sets(bronmap, exclude=workspace)
+    kandidaat = next(
+        (
+            item for item in opnieuw
+            if item.sleutel.casefold() == set_.sleutel.casefold()
+        ),
+        None,
+    )
+    if kandidaat is None and set_.main_archive:
+        main_naam = Path(set_.main_archive).name.casefold()
+        kandidaat = next(
+            (
+                item for item in opnieuw
+                if item.main_archive.name.casefold() == main_naam
+            ),
+            None,
+        )
+    fallback = kandidaat.volumes if kandidaat else ()
+    volumes = fallback if len(fallback) > len(bruikbaar) else bruikbaar
+    genegeerd_old = sum(
+        1 for pad in bronmap.rglob("*")
+        if pad.is_file()
+        and pad.name.casefold().endswith(".old")
+        and not pad.resolve().is_relative_to(workspace)
+    )
+    uitvoer.write(
+        "RAR-volumecontrole: "
+        f"bronmap={bronmap}; set={set_.sleutel}; "
+        f"main={set_.main_archive}; model={len(model_volumes)}; "
+        f"fallback={len(fallback)}; .old genegeerd={genegeerd_old}\n"
+    )
+    if volumes:
+        uitvoer.write(
+            f"RAR-volumes: eerste={volumes[0].name}; "
+            f"laatste={volumes[-1].name}\n"
+        )
+    if not volumes:
+        raise SalvageFout("RAR-set bevat geen volumes.")
+    main_archive = (
+        kandidaat.main_archive
+        if kandidaat and kandidaat.main_archive in volumes
+        else (Path(set_.main_archive).resolve() if set_.main_archive else volumes[0])
+    )
+    if main_archive not in volumes:
+        main_archive = volumes[0]
+    return ArchiveSet(set_.sleutel, main_archive, tuple(volumes))
 
 
 def _identiteit(intern_pad):
@@ -241,6 +342,9 @@ def voer_salvage_workflow_uit(
                 except Exception as fout:
                     uitvoer.write(f"PAR2-repair niet voltooid: {fout}\n")
         for set_ in sets:
+            set_ = _resolveer_set_volumes(
+                set_, bronmap, workspace, uitvoer
+            )
             gestart = datetime.now().isoformat(timespec="seconds")
             rij = database.verbinding.execute(
                 """
