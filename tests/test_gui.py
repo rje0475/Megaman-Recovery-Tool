@@ -14,6 +14,7 @@ import cli
 from gui import GuiDependencyFout
 from gui.main_window import MegamanMainWindow
 from gui.workers import ActionWorker
+from core.salvage_workflow import voer_salvage_workflow_uit
 
 
 LEGE_STATISTIEKEN = {
@@ -205,6 +206,7 @@ class MainWindowTest(unittest.TestCase):
                 self.venster._salvage()
         self.assertEqual(len(_FakeWorker.instances), 1)
         worker = _FakeWorker.instances[0]
+        self.assertIs(worker.actie, voer_salvage_workflow_uit)
         self.assertEqual(worker.args[0], bronmap)
         self.assertEqual(worker.args[1], bronmap / "megaman_salvage")
 

@@ -11,7 +11,7 @@ from core.salvage_compare import (
     VergelijkResultaat,
     vergelijk_extractie,
 )
-from core.salvage_extractor import salvage_extract
+from core.salvage_extractor import salvage_extract, winrar_salvage_extract
 from core.salvage_workflow import (
     ArchiveSet,
     SalvageFout,
@@ -20,8 +20,15 @@ from core.salvage_workflow import (
     ontdek_archive_sets,
     voer_salvage_workflow_uit,
 )
-from core.winrar_recovery import voer_winrar_recovery_uit
-from database import bewaar_rar_set, maak_database
+from core.winrar_recovery import (
+    vind_herstelde_volumes,
+    voer_winrar_recovery_uit,
+)
+from database import (
+    bewaar_rar_set,
+    maak_database,
+    vervang_rar_inventory_items,
+)
 
 
 class ToolDetectieTest(unittest.TestCase):
@@ -81,8 +88,12 @@ class WinRarTest(unittest.TestCase):
 
     def test_rebuilt_wordt_gekozen_en_origineel_blijft_gelijk(self):
         origineel = self.archive.read_bytes()
+        commando = []
+        opties = {}
 
         def runner(command, **kwargs):
+            commando.extend(command)
+            opties.update(kwargs)
             Path(kwargs["cwd"], "rebuilt.set met spaties.part01.rar").write_bytes(
                 b"hersteld"
             )
@@ -96,6 +107,29 @@ class WinRarTest(unittest.TestCase):
         self.assertTrue(resultaat.gekozen_archive.name.startswith("rebuilt."))
         self.assertEqual(self.archive.read_bytes(), origineel)
         self.assertIsInstance(resultaat.gekozen_archive, Path)
+        self.assertIn("-ibck", commando)
+        self.assertIn("-inul", commando)
+        self.assertIn("-y", commando)
+        self.assertIs(opties["shell"], False)
+
+    def test_console_rar_is_stil_zonder_gui_switch(self):
+        rar = self.root / "Rar.exe"
+        rar.write_bytes(b"exe")
+        tool = ToolResultaat("RAR/WinRAR", rar, True, "TEST")
+        gezien = []
+
+        def runner(command, **kwargs):
+            gezien.extend(command)
+            Path(kwargs["cwd"], "rebuilt_set met spaties.part01.rar").write_bytes(
+                b"x"
+            )
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        voer_winrar_recovery_uit(
+            (self.archive,), self.root / "rar-workspace", tool, runner
+        )
+        self.assertEqual(gezien[1:4], ["r", "-inul", "-y"])
+        self.assertNotIn("-ibck", gezien)
 
     def test_exitcode_fout_met_rebuilt_is_partial(self):
         def runner(command, **kwargs):
@@ -117,7 +151,24 @@ class WinRarTest(unittest.TestCase):
         )
         self.assertEqual(resultaat.status, "FAILED")
 
-
+    def test_rebuilt_multipart_is_generiek_en_numeriek_gesorteerd(self):
+        workspace = self.root / "rebuilt"
+        workspace.mkdir()
+        for naam in (
+            "rebuilt.Andere Naam.part10.rar",
+            "rebuilt.Andere Naam.part2.rar",
+            "rebuilt.Andere Naam.part1.rar",
+            "rebuilt.Andere Naam.part7.old",
+        ):
+            (workspace / naam).write_bytes(b"x")
+        self.assertEqual(
+            [pad.name for pad in vind_herstelde_volumes(workspace)],
+            [
+                "rebuilt.Andere Naam.part1.rar",
+                "rebuilt.Andere Naam.part2.rar",
+                "rebuilt.Andere Naam.part10.rar",
+            ],
+        )
 class ExtractieTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -160,6 +211,40 @@ class ExtractieTest(unittest.TestCase):
             self._runner(2, inhoud=False),
         )
         self.assertEqual(failed.status, "FAILED")
+
+    def test_winrar_partial_daarna_7zip_behoudt_eerdere_bestanden(self):
+        winrar = self.root / "WinRAR.exe"
+        winrar.write_bytes(b"exe")
+        winrar_tool = ToolResultaat("RAR/WinRAR", winrar, True, "TEST")
+        doel = self.root / "samengevoegd"
+
+        def winrar_runner(command, **kwargs):
+            (doel / "Week01").mkdir(parents=True)
+            (doel / "Week01" / "eerste.mp3").write_bytes(b"eerste")
+            return SimpleNamespace(
+                returncode=1, stdout="", stderr="CRC error"
+            )
+
+        eerste = winrar_salvage_extract(
+            self.archive, doel, winrar_tool, winrar_runner
+        )
+
+        def zeven_runner(command, **kwargs):
+            (doel / "Week02").mkdir(parents=True)
+            (doel / "Week02" / "tweede.mp3").write_bytes(b"tweede")
+            return SimpleNamespace(
+                returncode=2, stdout="", stderr="ERROR: CRC Failed"
+            )
+
+        tweede = salvage_extract(
+            self.archive, doel, self.tool, zeven_runner
+        )
+        self.assertEqual(eerste.status, "PARTIAL")
+        self.assertEqual(tweede.status, "PARTIAL")
+        self.assertTrue((doel / "Week01" / "eerste.mp3").is_file())
+        self.assertTrue((doel / "Week02" / "tweede.mp3").is_file())
+        self.assertIn("-o-", eerste.commando)
+        self.assertIn("-aos", tweede.commando)
 
 
 class ComparatorTest(unittest.TestCase):
@@ -353,22 +438,139 @@ class OrchestratorTest(unittest.TestCase):
                 patch("core.salvage_workflow.detecteer_7zip",
                       return_value=tool),
                 patch("core.salvage_workflow.voer_winrar_recovery_uit") as wr,
+                patch("core.salvage_workflow.winrar_salvage_extract") as wx,
                 patch("core.salvage_workflow.salvage_extract") as extract,
                 patch("core.salvage_workflow.vergelijk_extractie",
                       return_value=vergelijking),
             ):
                 wr.return_value = SimpleNamespace(
-                    status="PARTIAL", gekozen_archive=archive
+                    status="PARTIAL", gekozen_archive=archive,
+                    exitcode=1, commando=("rar.exe", "r"),
+                    herstelde_volumes=(),
+                )
+                wx.return_value = SimpleNamespace(
+                    status="PARTIAL", exitcode=1
                 )
                 extract.return_value = SimpleNamespace(
-                    status="PARTIAL"
+                    status="PARTIAL", exitcode=2, data_fouten=("CRC",)
                 )
                 resultaat = voer_salvage_workflow_uit(
                     root, database_pad=db_pad, skip_par2=True
                 )
             self.assertEqual(resultaat[0].eindstatus, "FAILED")
             wr.assert_called_once()
+            wx.assert_called_once()
             extract.assert_called_once()
+
+    def test_rebuilt_wordt_gekozen_beide_extracties_draaien_en_rescan_bepaalt_items(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as tijdelijke_map:
+            root = Path(tijdelijke_map)
+            archive = root / "Willekeurige Collectie.part1.rar"
+            archive.write_bytes(b"rar")
+            rebuilt = root / "rebuilt.Willekeurige Collectie.part1.rar"
+            rebuilt.write_bytes(b"repaired")
+            db_pad = root / "test.db"
+            db = maak_database(db_pad)
+            bewaar_rar_set(db, "willekeurige collectie", archive, True)
+            vervang_rar_inventory_items(
+                db, "willekeurige collectie", archive, [{
+                    "verwacht_rel_pad": r"Week09\track.mp3",
+                    "verwacht_rel_pad_norm": r"week09\track.mp3",
+                    "verwachte_map": "Week09",
+                    "verwachte_bestandsnaam": "track.mp3",
+                    "verwachte_grootte": 3,
+                }]
+            )
+            db.verbinding.execute(
+                """
+                INSERT INTO par_inventory (
+                  par_set_key, gekoppelde_rar_set_key, par_startbestand,
+                  status, bijgewerkt_op
+                ) VALUES (?, ?, ?, 'NOT_REPAIRABLE', 'nu')
+                """,
+                ("willekeurige collectie", "willekeurige collectie", "set.par2"),
+            )
+            db.verbinding.commit()
+            db.sluit()
+            tool_pad = root / "tool.exe"
+            tool_pad.write_bytes(b"exe")
+            tool = ToolResultaat("test", tool_pad, True, "TEST")
+            fasen = []
+
+            def winrar_extractie(bron, doel, **kwargs):
+                fasen.append(("winrar", Path(bron)))
+                map_ = Path(doel) / "Week09"
+                map_.mkdir(parents=True, exist_ok=True)
+                (map_ / "track.mp3").write_bytes(b"mp3")
+                return SimpleNamespace(status="PARTIAL", exitcode=1)
+
+            def zeven_extractie(bron, doel, **kwargs):
+                fasen.append(("7zip", Path(bron)))
+                self.assertTrue((Path(doel) / "Week09" / "track.mp3").is_file())
+                return SimpleNamespace(
+                    status="PARTIAL", exitcode=2, data_fouten=("CRC",)
+                )
+
+            def echte_vergelijking(verwacht, doel):
+                fasen.append(("rescan", Path(doel)))
+                return vergelijk_extractie(
+                    verwacht, doel, mp3_lezer=lambda _: True
+                )
+
+            log = StringIO()
+            with (
+                patch("core.salvage_workflow.detecteer_winrar",
+                      return_value=tool),
+                patch("core.salvage_workflow.detecteer_7zip",
+                      return_value=tool),
+                patch(
+                    "core.salvage_workflow.voer_winrar_recovery_uit",
+                    return_value=SimpleNamespace(
+                        status="PARTIAL", gekozen_archive=rebuilt,
+                        exitcode=3, commando=("rar.exe", "r", "-inul", "-y"),
+                        herstelde_volumes=(rebuilt,),
+                    ),
+                ),
+                patch(
+                    "core.salvage_workflow.winrar_salvage_extract",
+                    side_effect=winrar_extractie,
+                ),
+                patch(
+                    "core.salvage_workflow.salvage_extract",
+                    side_effect=zeven_extractie,
+                ),
+                patch(
+                    "core.salvage_workflow.vergelijk_extractie",
+                    side_effect=echte_vergelijking,
+                ),
+            ):
+                resultaat = voer_salvage_workflow_uit(
+                    root, database_pad=db_pad, skip_par2=True, uitvoer=log
+                )
+            self.assertEqual(
+                fasen,
+                [
+                    ("winrar", rebuilt),
+                    ("7zip", rebuilt),
+                    ("rescan", root / "megaman_salvage"
+                     / "willekeurige_collectie" / "extracted"),
+                ],
+            )
+            self.assertEqual(resultaat[0].eindstatus, "SALVAGED")
+            self.assertEqual(resultaat[0].spotify_recovery_items, 0)
+            tekst = log.getvalue()
+            for fase in (
+                "Salvage-workflow gestart",
+                "WinRAR recovery exitcode: 3",
+                "Gekozen extractiebron: rebuilt",
+                "WinRAR-extractie resultaat: PARTIAL; exitcode=1",
+                "7-Zip salvage-extractie resultaat: PARTIAL; exitcode=2",
+                "Extracted-map opnieuw gescand",
+                "Definitieve recovery-items: 0",
+            ):
+                self.assertIn(fase, tekst)
 
     def test_oude_rar_r00_set_wordt_gevonden(self):
         with tempfile.TemporaryDirectory() as tijdelijke_map:

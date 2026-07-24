@@ -1,4 +1,5 @@
 import re
+import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import datetime
@@ -6,7 +7,7 @@ from pathlib import Path
 
 from core.external_tools import detecteer_7zip, detecteer_winrar
 from core.salvage_compare import vergelijk_extractie
-from core.salvage_extractor import salvage_extract
+from core.salvage_extractor import salvage_extract, winrar_salvage_extract
 from core.winrar_recovery import voer_winrar_recovery_uit
 from database import DATABASE_BESTAND, SQLiteDatabase
 from paden import normaliseer_relatief_pad_sleutel
@@ -40,6 +41,10 @@ class SalvageSamenvatting:
 
 class SalvageFout(RuntimeError):
     pass
+
+
+def _toon_commando(commando):
+    return subprocess.list2cmdline(list(commando)) if commando else "(geen)"
 
 
 def ontdek_archive_sets(bronmap, exclude=None):
@@ -319,6 +324,8 @@ def voer_salvage_workflow_uit(
         Path(workspace).resolve() if workspace
         else bronmap / "megaman_salvage"
     )
+    uitvoer.write("Salvage-workflow gestart\n")
+    uitvoer.write(f"Werkmap: {workspace}\n")
     sets = ontdek_archive_sets(bronmap, exclude=workspace)
     if rar_set:
         sets = tuple(s for s in sets if s.sleutel.casefold() == rar_set.casefold())
@@ -339,13 +346,15 @@ def voer_salvage_workflow_uit(
                     voer_par2_reparatie_uit(
                         bronmap, database_pad=database_pad, uitvoer=uitvoer
                     )
+                    uitvoer.write("PAR2-reparatie resultaat: voltooid\n")
                 except Exception as fout:
-                    uitvoer.write(f"PAR2-repair niet voltooid: {fout}\n")
+                    uitvoer.write(f"PAR2-reparatie resultaat: mislukt ({fout})\n")
         for set_ in sets:
             set_ = _resolveer_set_volumes(
                 set_, bronmap, workspace, uitvoer
             )
             gestart = datetime.now().isoformat(timespec="seconds")
+            run_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             rij = database.verbinding.execute(
                 """
                 SELECT status FROM par_inventory
@@ -355,21 +364,39 @@ def voer_salvage_workflow_uit(
             ).fetchone()
             bronstatus = rij["status"] if rij else "UNKNOWN"
             set_workspace = workspace / re.sub(r"[^a-zA-Z0-9._-]+", "_", set_.sleutel)
-            recovery = set_workspace / "recovery"
+            recovery = set_workspace / "recovery" / run_id
             extracted = set_workspace / "extracted"
             uitvoer.write(
                 f"\nSALVAGE [{set_.sleutel}] PAR2={bronstatus}\n"
+            )
+            uitvoer.write(
+                f"Originele RAR-volumes gevonden: {len(set_.volumes)}\n"
+                f"PAR2-status: {bronstatus}\n"
             )
             if bronstatus == "NOT_REPAIRABLE":
                 uitvoer.write(
                     "PAR2 onvoldoende; WinRAR/7-Zip salvage wordt geprobeerd.\n"
                 )
             if not skip_winrar and bronstatus != "COMPLETE":
+                uitvoer.write(
+                    "WinRAR/RAR executable: "
+                    f"{winrar_tool.pad or 'niet gevonden'}\n"
+                    "WinRAR recovery commando gestart\n"
+                )
                 kwargs = {"tool": winrar_tool}
                 if winrar_runner:
                     kwargs["runner"] = winrar_runner
                 winrar = voer_winrar_recovery_uit(
                     set_.volumes, recovery, **kwargs
+                )
+                uitvoer.write(
+                    f"WinRAR recovery commando: "
+                    f"{_toon_commando(getattr(winrar, 'commando', ()))}\n"
+                    f"WinRAR recovery exitcode: "
+                    f"{getattr(winrar, 'exitcode', None)}\n"
+                    f"WinRAR recovery: {winrar.status}\n"
+                    f"Rebuilt volumes gevonden: "
+                    f"{len(getattr(winrar, 'herstelde_volumes', ()))}\n"
                 )
             else:
                 from core.winrar_recovery import WinRarResultaat
@@ -383,10 +410,42 @@ def voer_salvage_workflow_uit(
                 if winrar.status in ("SUCCESS", "PARTIAL")
                 else set_.main_archive
             )
+            bron_keuze = (
+                "rebuilt" if gekozen != set_.main_archive else "origineel"
+            )
+            uitvoer.write(
+                f"Gekozen extractiebron: {bron_keuze}\n"
+                f"Eerste volume van gekozen set: {gekozen}\n"
+            )
+            winrar_kwargs = {"tool": winrar_tool}
+            if winrar_runner:
+                winrar_kwargs["runner"] = winrar_runner
+            uitvoer.write("WinRAR-extractie gestart\n")
+            winrar_extractie = winrar_salvage_extract(
+                gekozen, extracted, **winrar_kwargs
+            )
+            uitvoer.write(
+                f"WinRAR-extractie commando: "
+                f"{_toon_commando(getattr(winrar_extractie, 'commando', ()))}\n"
+                f"WinRAR-extractie resultaat: {winrar_extractie.status}; "
+                f"exitcode={winrar_extractie.exitcode}\n"
+            )
             kwargs = {"tool": zeven_tool}
             if sevenzip_runner:
                 kwargs["runner"] = sevenzip_runner
+            uitvoer.write(
+                f"7-Zip executable: {zeven_tool.pad or 'niet gevonden'}\n"
+                "7-Zip salvage-extractie gestart\n"
+            )
             extractie = salvage_extract(gekozen, extracted, **kwargs)
+            uitvoer.write(
+                f"7-Zip salvage-extractie commando: "
+                f"{_toon_commando(getattr(extractie, 'commando', ()))}\n"
+                f"7-Zip salvage-extractie resultaat: {extractie.status}; "
+                f"exitcode={getattr(extractie, 'exitcode', None)}\n"
+                f"Extractiefouten: "
+                f"{len(getattr(extractie, 'data_fouten', ()))}\n"
+            )
             verwacht = [
                 dict(r) for r in database.verbinding.execute(
                     """
@@ -396,6 +455,14 @@ def voer_salvage_workflow_uit(
                 )
             ]
             vergelijking = vergelijk_extractie(verwacht, extracted)
+            gevonden_mp3s = sum(
+                1 for pad in extracted.rglob("*")
+                if pad.is_file() and pad.suffix.casefold() == ".mp3"
+            )
+            uitvoer.write(
+                "Extracted-map opnieuw gescand\n"
+                f"Uitgepakte MP3's gevonden: {gevonden_mp3s}\n"
+            )
             recovery_items = _synchroniseer_recovery(
                 database, set_.sleutel, vergelijking
             )
@@ -426,6 +493,11 @@ def voer_salvage_workflow_uit(
                 f"{eind}: verwacht {len(verwacht)}, goed {goed}, "
                 f"ontbrekend {ontbrekend}, 0-byte {nul}, "
                 f"onleesbaar {onleesbaar}, extra {len(vergelijking.extras)}\n"
+                f"Verwacht: {len(verwacht)}\n"
+                f"Hersteld/aanwezig: {goed + grootte}\n"
+                f"Definitief ontbrekend: {ontbrekend}\n"
+                f"Corrupt/nul bytes/onbruikbaar: {onleesbaar + nul}\n"
+                f"Definitieve recovery-items: {recovery_items}\n"
             )
             samenvattingen.append(samenvatting)
     finally:

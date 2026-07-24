@@ -4,6 +4,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+RAR_LOCATIES = (
+    Path(r"C:\Program Files\WinRAR\Rar.exe"),
+    Path(r"C:\Program Files (x86)\WinRAR\Rar.exe"),
+)
 WINRAR_LOCATIES = (
     Path(r"C:\Program Files\WinRAR\WinRAR.exe"),
     Path(r"C:\Program Files (x86)\WinRAR\WinRAR.exe"),
@@ -50,8 +54,8 @@ def detecteer_tool(
 
 def detecteer_winrar(**kwargs):
     return detecteer_tool(
-        "WinRAR", "WINRAR_PATH", WINRAR_LOCATIES,
-        ("WinRAR.exe", "winrar"), **kwargs,
+        "RAR/WinRAR", "WINRAR_PATH", RAR_LOCATIES + WINRAR_LOCATIES,
+        ("Rar.exe", "rar", "WinRAR.exe", "winrar"), **kwargs,
     )
 
 

@@ -199,8 +199,10 @@ gelogd. Deze workflow wijzigt geen MP3-bestanden.
 # Fouttolerante RAR-salvage
 
 `NOT_REPAIRABLE` betekent niet dat niets meer gered kan worden. Na PAR2
-probeert de salvage-workflow zo nodig WinRAR-recovery en pakt daarna met 7-Zip
-altijd zoveel mogelijk bestanden uit:
+probeert de salvage-workflow zo nodig non-interactieve RAR/WinRAR-recovery.
+Daarna probeert eerst RAR/WinRAR en vervolgens 7-Zip fouttolerant uit te
+pakken. De tweede poging vult de bestaande uitvoer aan en verwijdert geen
+bestanden uit de eerste poging:
 
 ```powershell
 python main.py --salvage-rar "C:\downloads"
@@ -209,10 +211,12 @@ python main.py --salvage-rar "C:\downloads" --rar-set "Jaarcollectie1999"
 python main.py --salvage-rar "C:\downloads" --skip-par2 --skip-winrar
 ```
 
-Stel afwijkende toolpaden in met `WINRAR_PATH` en `SEVENZIP_PATH`. Anders
-worden standaardinstallaties en daarna PATH doorzocht. Iedere set krijgt een
-geïsoleerde `recovery`- en `extracted`-map onder `megaman_salvage`. Originele
-RAR-volumes worden nooit overschreven.
+Stel afwijkende toolpaden in met `WINRAR_PATH` en `SEVENZIP_PATH`. Voor
+RAR/WinRAR heeft de consoletool `Rar.exe` de voorkeur. Anders worden
+standaardinstallaties en daarna PATH doorzocht. Iedere recovery-poging krijgt
+een eigen runmap onder `recovery`; de samengevoegde uitvoer blijft in
+`extracted`. Bestaande salvage-output en originele RAR-volumes worden nooit
+verwijderd of overschreven.
 
 - `COMPLETE`: alle verwachte MP3’s zijn bruikbaar.
 - `SALVAGED`: niet volledig gerepareerd, maar alle MP3’s zijn gered.
