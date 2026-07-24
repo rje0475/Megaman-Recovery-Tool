@@ -421,6 +421,23 @@ class SQLiteDatabase:
             )
             """
         )
+        salvage_kolommen = {
+            rij["name"]
+            for rij in self.verbinding.execute(
+                "PRAGMA table_info(salvage_runs)"
+            )
+        }
+        salvage_migraties = {
+            "physical_count": "INTEGER NOT NULL DEFAULT 0",
+            "damaged_count": "INTEGER NOT NULL DEFAULT 0",
+            "ffmpeg_error_count": "INTEGER NOT NULL DEFAULT 0",
+            "deduplicated_count": "INTEGER NOT NULL DEFAULT 0",
+        }
+        for kolom, definitie in salvage_migraties.items():
+            if kolom not in salvage_kolommen:
+                self.verbinding.execute(
+                    f"ALTER TABLE salvage_runs ADD COLUMN {kolom} {definitie}"
+                )
         self.verbinding.execute(
             """
             CREATE TABLE IF NOT EXISTS salvage_file_results (

@@ -224,6 +224,12 @@ wordt met beide tools geprobeerd, maar vervangt de originele set nooit: ook de
 originele volumes krijgen altijd beide extractiepogingen. Exitcode 0 bepaalt
 niet de eindstatus; de vergelijking met de verwachte MP3-inventaris doet dat.
 
+De eindclassificatie combineert deze vergelijking met opgeslagen
+FFmpeg-validatiefouten en 0-byte-feiten op genormaliseerd relatief pad.
+`Fysiek aanwezig` betekent daarom niet automatisch `volledig goed`:
+FFmpeg-fouten, nul-byte en andere onleesbare bestanden blijven unieke
+recovery-items, ook wanneer het bestand wel in `extracted` staat.
+
 - `COMPLETE`: alle verwachte MP3’s zijn bruikbaar.
 - `SALVAGED`: niet volledig gerepareerd, maar alle MP3’s zijn gered.
 - `PARTIAL`: een deel is gered en recovery-items zijn nodig.

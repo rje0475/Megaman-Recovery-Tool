@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 from core.external_tools import detecteer_7zip, detecteer_winrar
+from core.salvage_classification import classificeer_salvage_resultaat
 from core.salvage_compare import vergelijk_extractie
 from core.salvage_extractor import salvage_extract, winrar_salvage_extract
 from core.winrar_recovery import (
@@ -31,10 +32,14 @@ class SalvageSamenvatting:
     winrar_resultaat: str
     extractie_resultaat: str
     verwacht: int
+    fysiek_aanwezig: int
     goed: int
+    beschadigd_aanwezig: int
     ontbrekend: int
     nul_bytes: int
     onleesbaar: int
+    ffmpeg_fouten: int
+    duplicaten_verwijderd: int
     grootteafwijking: int
     extra: int
     spotify_recovery_items: int
@@ -267,28 +272,39 @@ def _identiteit(intern_pad):
 
 def _synchroniseer_recovery(database, set_sleutel, vergelijking):
     defecten = {
-        item.intern_pad.casefold(): item
+        normaliseer_relatief_pad_sleutel(item.intern_pad): item
         for item in vergelijking.items
         if item.status in ("MISSING", "ZERO_BYTE", "UNREADABLE")
     }
     for item in defecten.values():
         artiest, titel = _identiteit(item.intern_pad)
+        probleem_type = (
+            "ontbreekt"
+            if item.status == "MISSING"
+            else "corrupt"
+            if item.status == "UNREADABLE" or item.ffmpeg_fout
+            else "nul_bytes"
+        )
+        feit_corrupt = (
+            item.status == "UNREADABLE" or bool(item.ffmpeg_fout)
+        )
         database.verbinding.execute(
             """
             INSERT INTO recovery_items (
               rar_set_key, verwacht_rel_pad, verwacht_rel_pad_norm,
-              probleem_type, probleem_bron, verwachte_grootte,
+              probleem_type, probleem_bron, verwachte_grootte, ffmpeg_fout,
               feit_ontbreekt, feit_corrupt, feit_nul_bytes,
               spotify_verwerkt, download_verwerkt, geplaatst,
               bepaalde_artiest, bepaalde_titel, identiteit_bron,
               identiteit_betrouwbaarheid, identiteit_reden,
               aangemaakt_op, bijgewerkt_op
-            ) VALUES (?, ?, ?, ?, 'salvage', ?, ?, ?, ?, 0, 0, 0, ?, ?,
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, ?,
                       'rar_pad', .75, ?, ?, ?)
             ON CONFLICT (rar_set_key, verwacht_rel_pad_norm) DO UPDATE SET
               probleem_type=excluded.probleem_type,
-              probleem_bron='salvage',
+              probleem_bron=excluded.probleem_bron,
               verwachte_grootte=excluded.verwachte_grootte,
+              ffmpeg_fout=excluded.ffmpeg_fout,
               feit_ontbreekt=excluded.feit_ontbreekt,
               feit_corrupt=excluded.feit_corrupt,
               feit_nul_bytes=excluded.feit_nul_bytes,
@@ -300,9 +316,11 @@ def _synchroniseer_recovery(database, set_sleutel, vergelijking):
               bijgewerkt_op=excluded.bijgewerkt_op
             """,
             (
-                set_sleutel, item.intern_pad, item.intern_pad.casefold(),
-                item.status.casefold(), item.verwachte_grootte,
-                item.status == "MISSING", item.status == "UNREADABLE",
+                set_sleutel, item.intern_pad,
+                normaliseer_relatief_pad_sleutel(item.intern_pad),
+                probleem_type, ",".join(item.bronnen or ("salvage",)),
+                item.verwachte_grootte, item.ffmpeg_fout,
+                item.status == "MISSING", feit_corrupt,
                 item.status == "ZERO_BYTE", artiest, titel, item.reden,
                 datetime.now().isoformat(timespec="seconds"),
                 datetime.now().isoformat(timespec="seconds"),
@@ -311,7 +329,7 @@ def _synchroniseer_recovery(database, set_sleutel, vergelijking):
     for rij in database.verbinding.execute(
         """
         SELECT id, verwacht_rel_pad_norm FROM recovery_items
-        WHERE rar_set_key=? AND probleem_bron='salvage'
+        WHERE rar_set_key=? AND probleem_bron LIKE '%salvage%'
         """, (set_sleutel,)
     ).fetchall():
         if rij["verwacht_rel_pad_norm"] in defecten:
@@ -341,11 +359,13 @@ def _bewaar_run(
           started_at, finished_at, rar_set_key, source_status, par2_result,
           winrar_result, winrar_path, sevenzip_result, sevenzip_path,
           chosen_archive, recovery_workspace, extraction_dir, expected_count,
-          ok_count, missing_count, zero_byte_count, unreadable_count,
+          physical_count, ok_count, damaged_count, missing_count,
+          zero_byte_count, unreadable_count, ffmpeg_error_count,
+          deduplicated_count,
           size_mismatch_count, extra_count, recovery_item_count,
           final_status, summary
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                  ?, ?)
+                  ?, ?, ?, ?, ?, ?)
         """,
         (
             gestart, klaar, samenvatting.rar_setnaam, bronstatus,
@@ -354,8 +374,11 @@ def _bewaar_run(
             extractie.status, str(zeven_tool.pad) if zeven_tool.pad else None,
             str(gekozen), str(recovery_workspace),
             str(samenvatting.extractiemap), samenvatting.verwacht,
-            samenvatting.goed, samenvatting.ontbrekend,
+            samenvatting.fysiek_aanwezig, samenvatting.goed,
+            samenvatting.beschadigd_aanwezig, samenvatting.ontbrekend,
             samenvatting.nul_bytes, samenvatting.onleesbaar,
+            samenvatting.ffmpeg_fouten,
+            samenvatting.duplicaten_verwijderd,
             samenvatting.grootteafwijking, samenvatting.extra,
             samenvatting.spotify_recovery_items, samenvatting.eindstatus,
             repr(samenvatting),
@@ -581,7 +604,23 @@ def voer_salvage_workflow_uit(
                     """, (set_.sleutel,)
                 )
             ]
-            vergelijking = vergelijk_extractie(verwacht, extracted)
+            ruwe_vergelijking = vergelijk_extractie(verwacht, extracted)
+            analyse_rijen = database.verbinding.execute(
+                """
+                SELECT relatief_pad, bestand, nul_bytes, ffmpeg_status,
+                       ffmpeg_type, ffmpeg_melding, rar_status, rar_type
+                FROM mp3_bestanden
+                WHERE bestaat=1
+                  AND (
+                    nul_bytes=1 OR ffmpeg_status='ERROR' OR rar_status='ERROR'
+                  )
+                """
+            ).fetchall()
+            classificatie = classificeer_salvage_resultaat(
+                ruwe_vergelijking, analyse_rijen,
+                wortels=(bronmap, workspace, extracted),
+            )
+            vergelijking = classificatie.vergelijking
             gevonden_mp3s = sum(
                 1 for pad in extracted.rglob("*")
                 if pad.is_file() and pad.suffix.casefold() == ".mp3"
@@ -593,13 +632,13 @@ def voer_salvage_workflow_uit(
             recovery_items = _synchroniseer_recovery(
                 database, set_.sleutel, vergelijking
             )
-            goed = vergelijking.aantal("OK")
-            ontbrekend = vergelijking.aantal("MISSING")
-            nul = vergelijking.aantal("ZERO_BYTE")
-            onleesbaar = vergelijking.aantal("UNREADABLE")
+            goed = classificatie.volledig_goed
+            ontbrekend = classificatie.ontbrekend
+            nul = classificatie.nul_bytes
+            onleesbaar = classificatie.onleesbaar
             grootte = vergelijking.aantal("SIZE_MISMATCH")
-            defect = ontbrekend + nul + onleesbaar
-            bruikbaar = goed + grootte + len(vergelijking.extras)
+            defect = ontbrekend + classificatie.beschadigd_aanwezig
+            bruikbaar = goed + len(vergelijking.extras)
             if verwacht and defect == 0:
                 eind = "COMPLETE" if bronstatus == "COMPLETE" else "SALVAGED"
             elif bruikbaar:
@@ -608,7 +647,10 @@ def voer_salvage_workflow_uit(
                 eind = "FAILED"
             samenvatting = SalvageSamenvatting(
                 set_.sleutel, bronstatus, winrar.status, extractie.status,
-                len(verwacht), goed, ontbrekend, nul, onleesbaar, grootte,
+                len(verwacht), classificatie.fysiek_aanwezig, goed,
+                classificatie.beschadigd_aanwezig, ontbrekend, nul,
+                onleesbaar, classificatie.ffmpeg_fouten_ingelezen,
+                classificatie.duplicaten_verwijderd, grootte,
                 len(vergelijking.extras), recovery_items, eind, extracted,
             )
             _bewaar_run(
@@ -617,13 +659,23 @@ def voer_salvage_workflow_uit(
                 winrar_tool, zeven_tool,
             )
             uitvoer.write(
-                f"{eind}: verwacht {len(verwacht)}, goed {goed}, "
+                f"{eind}: verwacht {len(verwacht)}, fysiek aanwezig "
+                f"{classificatie.fysiek_aanwezig}, volledig goed {goed}, "
                 f"ontbrekend {ontbrekend}, 0-byte {nul}, "
                 f"onleesbaar {onleesbaar}, extra {len(vergelijking.extras)}\n"
                 f"Verwacht: {len(verwacht)}\n"
-                f"Hersteld/aanwezig: {goed + grootte}\n"
+                f"Fysiek aanwezig: {classificatie.fysiek_aanwezig}\n"
+                f"Volledig goed: {goed}\n"
+                f"Beschadigd maar aanwezig: "
+                f"{classificatie.beschadigd_aanwezig}\n"
+                f"FFmpeg-fouten ingelezen: "
+                f"{classificatie.ffmpeg_fouten_ingelezen}\n"
+                f"Nul-byte: {nul}\n"
+                f"Onleesbaar: {onleesbaar}\n"
+                f"Leesbare grootteafwijking: {grootte}\n"
                 f"Definitief ontbrekend: {ontbrekend}\n"
-                f"Corrupt/nul bytes/onbruikbaar: {onleesbaar + nul}\n"
+                f"Duplicaten verwijderd: "
+                f"{classificatie.duplicaten_verwijderd}\n"
                 f"Definitieve recovery-items: {recovery_items}\n"
             )
             samenvattingen.append(samenvatting)

@@ -11,6 +11,8 @@ class VergelijkItem:
     verwachte_grootte: int | None
     werkelijke_grootte: int | None
     reden: str
+    ffmpeg_fout: str | None = None
+    bronnen: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

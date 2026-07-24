@@ -11,6 +11,7 @@ from core.salvage_compare import (
     VergelijkResultaat,
     vergelijk_extractie,
 )
+from core.salvage_classification import classificeer_salvage_resultaat
 from core.salvage_extractor import salvage_extract, winrar_salvage_extract
 from core.salvage_workflow import (
     ArchiveSet,
@@ -341,6 +342,83 @@ class ComparatorTest(unittest.TestCase):
             self.assertEqual(len(resultaat.extras), 1)
 
 
+class DefinitieveClassificatieTest(unittest.TestCase):
+    @staticmethod
+    def _rij(pad, ffmpeg=False, nul=False, bestand=None):
+        return {
+            "relatief_pad": pad,
+            "bestand": bestand or pad,
+            "nul_bytes": nul,
+            "ffmpeg_status": "ERROR" if ffmpeg else "OK",
+            "ffmpeg_type": "Header missing" if ffmpeg else None,
+            "ffmpeg_melding": "header ontbreekt" if ffmpeg else None,
+        }
+
+    def test_761_aanwezig_met_19_ffmpeg_en_5_nul_levert_24_items(self):
+        items = tuple(
+            VergelijkItem(
+                fr"Collectie\track{nummer:03d}.mp3", "OK",
+                Path(f"track{nummer:03d}.mp3"), 3, 3, "ok",
+            )
+            for nummer in range(761)
+        )
+        analyse = [
+            self._rij(
+                fr"scan\Collectie\track{nummer:03d}.mp3",
+                ffmpeg=True,
+                bestand=Path("C:/bron/scan/Collectie")
+                / f"track{nummer:03d}.mp3",
+            )
+            for nummer in range(19)
+        ] + [
+            self._rij(fr"Collectie\track{nummer:03d}.mp3", nul=True)
+            for nummer in range(19, 24)
+        ]
+        resultaat = classificeer_salvage_resultaat(
+            VergelijkResultaat(items, ()), analyse,
+            wortels=(Path("C:/bron"),),
+        )
+        self.assertEqual(resultaat.verwacht, 761)
+        self.assertEqual(resultaat.fysiek_aanwezig, 761)
+        self.assertEqual(resultaat.volledig_goed, 737)
+        self.assertEqual(resultaat.beschadigd_aanwezig, 24)
+        self.assertEqual(resultaat.onleesbaar, 19)
+        self.assertEqual(resultaat.nul_bytes, 5)
+        self.assertEqual(resultaat.ontbrekend, 0)
+        self.assertEqual(resultaat.recovery_items, 24)
+
+    def test_overlap_ffmpeg_nul_case_en_absolute_pad_wordt_een_item(self):
+        intern = "Jaar\\Één Song's.mp3"
+        vergelijking = VergelijkResultaat((
+            VergelijkItem(
+                intern, "ZERO_BYTE", Path("uit/Jaar/Één Song's.mp3"),
+                1, 0, "zero_byte_after_salvage",
+            ),
+        ), ())
+        analyse = [self._rij(
+            r"JAAR\ÉÉN SONG'S.MP3", ffmpeg=True, nul=True,
+            bestand=Path("C:/bron/Jaar/Één Song's.mp3"),
+        )]
+        resultaat = classificeer_salvage_resultaat(
+            vergelijking, analyse, wortels=(Path("C:/bron"),)
+        )
+        self.assertEqual(resultaat.recovery_items, 1)
+        self.assertEqual(resultaat.nul_bytes, 1)
+        self.assertGreaterEqual(resultaat.duplicaten_verwijderd, 1)
+        item = resultaat.vergelijking.items[0]
+        self.assertEqual(item.status, "ZERO_BYTE")
+        self.assertIn("Header missing", item.ffmpeg_fout)
+
+    def test_lege_inventaris_blijft_leeg(self):
+        resultaat = classificeer_salvage_resultaat(
+            VergelijkResultaat((), ()),
+            [self._rij("los.mp3", ffmpeg=True)],
+        )
+        self.assertEqual(resultaat.verwacht, 0)
+        self.assertEqual(resultaat.recovery_items, 0)
+        self.assertEqual(resultaat.fysiek_aanwezig, 0)
+
+
 class RecoverySynchronisatieTest(unittest.TestCase):
     def test_alleen_defecten_en_handmatige_keuzes_blijven(self):
         with tempfile.TemporaryDirectory() as tijdelijke_map:
@@ -361,6 +439,38 @@ class RecoverySynchronisatieTest(unittest.TestCase):
                 self.assertEqual(len(rijen), 1)
                 self.assertEqual(rijen[0]["identiteit_reden"],
                                  "missing_after_salvage")
+            finally:
+                db.sluit()
+
+    def test_database_gebruikt_dezelfde_ffmpeg_deduplicatie(self):
+        with tempfile.TemporaryDirectory() as tijdelijke_map:
+            db = maak_database(Path(tijdelijke_map) / "test.db")
+            try:
+                vergelijking = VergelijkResultaat((
+                    VergelijkItem(
+                        "Jaar/Defect.mp3", "ZERO_BYTE", Path("defect.mp3"),
+                        1, 0, "zero_byte_after_salvage",
+                    ),
+                ), ())
+                classificatie = classificeer_salvage_resultaat(
+                    vergelijking,
+                    [DefinitieveClassificatieTest._rij(
+                        r"JAAR\DEFECT.MP3", ffmpeg=True, nul=True
+                    )],
+                )
+                aantal = _synchroniseer_recovery(
+                    db, "set", classificatie.vergelijking
+                )
+                rijen = db.verbinding.execute(
+                    "SELECT * FROM recovery_items"
+                ).fetchall()
+                self.assertEqual(aantal, 1)
+                self.assertEqual(len(rijen), 1)
+                self.assertEqual(rijen[0]["feit_nul_bytes"], 1)
+                self.assertEqual(rijen[0]["feit_corrupt"], 1)
+                self.assertEqual(rijen[0]["probleem_type"], "corrupt")
+                self.assertIn("Header missing", rijen[0]["ffmpeg_fout"])
+                self.assertIn("ffmpeg", rijen[0]["probleem_bron"])
             finally:
                 db.sluit()
 
@@ -655,6 +765,10 @@ class OrchestratorTest(unittest.TestCase):
                 "Tool: 7-Zip",
                 "Nieuw teruggewonnen:",
                 "Extracted-map opnieuw gescand",
+                "Fysiek aanwezig: 2",
+                "Volledig goed: 2",
+                "FFmpeg-fouten ingelezen: 0",
+                "Duplicaten verwijderd: 0",
                 "Definitieve recovery-items: 0",
             ):
                 self.assertIn(fase, tekst)
