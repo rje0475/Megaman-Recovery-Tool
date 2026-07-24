@@ -275,13 +275,25 @@ voer_spotify_search_uit(
 
 # Spotify Playlist Manager
 
-Playlistbeheer gebruikt dezelfde Spotify-client, maar vereist daarnaast een
-OAuth-gebruikerstoken met de scopes `playlist-read-private` en
-`playlist-modify-private`:
+Playlistbeheer gebruikt Authorization Code Flow met de scopes
+`playlist-read-private` en `playlist-modify-private`. Configureer in de
+Spotify Developer App exact deze redirect URI:
 
-```powershell
-$env:SPOTIFY_ACCESS_TOKEN="..."
+```text
+http://127.0.0.1:8888/callback
 ```
+
+Bij de eerste autorisatie opent de standaardbrowser. De tool bewaart access
+token, refresh token en verloopmoment standaard in:
+
+```text
+%LOCALAPPDATA%\Megaman Recovery Tool\spotify_user_tokens.json
+```
+
+Met `SPOTIFY_TOKEN_CACHE` kan een ander lokaal cachepad worden ingesteld. Het
+bestand wordt atomisch geschreven en alleen voor deze lokale gebruiker
+bedoeld. Verlopen tokens worden automatisch vernieuwd; handmatig instellen van
+`SPOTIFY_ACCESS_TOKEN` is niet nodig.
 
 `sync_playlist` werkt altijd op één expliciet geselecteerde recovery-set. De
 functie hergebruikt eerst de opgeslagen playlist-ID, zoekt anders in de

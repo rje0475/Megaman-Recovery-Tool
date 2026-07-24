@@ -1,6 +1,7 @@
 import sys
 from datetime import datetime
 
+from core.spotify.auth import verkrijg_geldig_gebruikerstoken
 from core.spotify.client import SpotifyClient
 from core.spotify.models import SpotifyPlaylistSummary
 
@@ -137,7 +138,10 @@ def sync_playlist(
     recovery_set = _selecteer_recovery_set(
         database, recovery_set_id, archive_set_name
     )
-    client = client or SpotifyClient.from_environment()
+    if client is None:
+        client = SpotifyClient.from_environment(
+            access_token=verkrijg_geldig_gebruikerstoken()
+        )
     playlist, aangemaakt = maak_of_open_playlist(
         database, recovery_set, client
     )

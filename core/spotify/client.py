@@ -38,14 +38,19 @@ class SpotifyClient:
         self._token_expires = 0.0
 
     @classmethod
-    def from_environment(cls, environment=None, **kwargs):
+    def from_environment(
+        cls, environment=None, access_token=None, **kwargs
+    ):
         environment = os.environ if environment is None else environment
         return cls(
             SpotifyConfig(
                 environment.get("SPOTIFY_CLIENT_ID", ""),
                 environment.get("SPOTIFY_CLIENT_SECRET", ""),
                 environment.get("SPOTIFY_MARKET", "NL"),
-                access_token=environment.get("SPOTIFY_ACCESS_TOKEN"),
+                access_token=(
+                    access_token
+                    or environment.get("SPOTIFY_ACCESS_TOKEN")
+                ),
             ),
             **kwargs,
         )

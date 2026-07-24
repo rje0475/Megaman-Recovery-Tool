@@ -2,6 +2,7 @@ import io
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from core.spotify import sync_playlist
 from core.spotify.playlist import SpotifyPlaylistError
@@ -185,6 +186,27 @@ class SpotifyPlaylistManagerTest(unittest.TestCase):
                 self.db, client=FakePlaylistClient(),
                 uitvoer=io.StringIO(),
             )
+
+    def test_playlistmanager_haalt_automatisch_gebruikerstoken_op(self):
+        fake_client = FakePlaylistClient()
+        with (
+            patch(
+                "core.spotify.playlist.verkrijg_geldig_gebruikerstoken",
+                return_value="automatisch-token",
+            ) as token_ophalen,
+            patch(
+                "core.spotify.playlist.SpotifyClient.from_environment",
+                return_value=fake_client,
+            ) as client_maken,
+        ):
+            sync_playlist(
+                self.db, recovery_set_id=self.set_id,
+                uitvoer=io.StringIO(),
+            )
+        token_ophalen.assert_called_once_with()
+        client_maken.assert_called_once_with(
+            access_token="automatisch-token"
+        )
 
 
 if __name__ == "__main__":

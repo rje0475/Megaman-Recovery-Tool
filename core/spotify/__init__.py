@@ -15,6 +15,13 @@ from core.spotify.playlist import (
     sync_playlist,
     voeg_matched_tracks_toe,
 )
+from core.spotify.auth import (
+    SpotifyCallbackTimeout,
+    SpotifyTokenStore,
+    SpotifyUserAuthorizationError,
+    autoriseer_spotify_gebruiker,
+    verkrijg_geldig_gebruikerstoken,
+)
 
 __all__ = [
     "SpotifyRecoverySetError",
@@ -26,4 +33,9 @@ __all__ = [
     "maak_of_open_playlist",
     "sync_playlist",
     "voeg_matched_tracks_toe",
+    "SpotifyCallbackTimeout",
+    "SpotifyTokenStore",
+    "SpotifyUserAuthorizationError",
+    "autoriseer_spotify_gebruiker",
+    "verkrijg_geldig_gebruikerstoken",
 ]
