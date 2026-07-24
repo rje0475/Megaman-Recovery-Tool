@@ -251,6 +251,22 @@ class SQLiteDatabase:
             )
             """
         )
+        recovery_set_kolommen = {
+            rij["name"]
+            for rij in self.verbinding.execute(
+                "PRAGMA table_info(recovery_sets)"
+            )
+        }
+        recovery_set_migraties = {
+            "spotify_playlist_id": "TEXT",
+            "spotify_playlist_name": "TEXT",
+        }
+        for kolom, kolomtype in recovery_set_migraties.items():
+            if kolom not in recovery_set_kolommen:
+                self.verbinding.execute(
+                    f"ALTER TABLE recovery_sets "
+                    f"ADD COLUMN {kolom} {kolomtype}"
+                )
         self.verbinding.execute(
             """
             CREATE TABLE IF NOT EXISTS recovery_provider_resultaten (

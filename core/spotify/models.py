@@ -13,6 +13,7 @@ class SpotifyConfig:
     client_secret: str
     market: str = "NL"
     timeout: int = 15
+    access_token: str | None = None
 
 
 @dataclass(frozen=True)
@@ -58,3 +59,18 @@ class RecoverySetInfo:
     recovery_item_count: int
     created_at: str
     updated_at: str
+
+
+@dataclass(frozen=True)
+class SpotifyPlaylistSummary:
+    recovery_set_id: int
+    archive_set_name: str
+    playlist_id: str
+    playlist_name: str
+    created: bool
+    matched_total: int
+    added: int
+    already_present: int
+    skipped_low_confidence: int
+    skipped_not_found: int
+    skipped_manual_review: int

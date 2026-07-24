@@ -255,7 +255,7 @@ titel en, wanneer lokaal leesbaar, duur. Alleen de hoogste score wordt op het
 recovery-item opgeslagen als `MATCHED`, `LOW_CONFIDENCE`, `NOT_FOUND` of
 `MANUAL_REVIEW`.
 
-Deze fase maakt geen playlists, wijzigt geen GUI en downloadt geen media.
+De zoekfase wijzigt geen playlists, GUI of mediabestanden.
 
 De zoekengine verwerkt altijd precies één recovery-set. Geef bij voorkeur
 `recovery_set_id` of `archive_set_name` door; zonder selectie wordt alleen de
@@ -271,4 +271,24 @@ voer_spotify_search_uit(
     force=False,
     allow_large_batch=False,
 )
+```
+
+# Spotify Playlist Manager
+
+Playlistbeheer gebruikt dezelfde Spotify-client, maar vereist daarnaast een
+OAuth-gebruikerstoken met de scopes `playlist-read-private` en
+`playlist-modify-private`:
+
+```powershell
+$env:SPOTIFY_ACCESS_TOKEN="..."
+```
+
+`sync_playlist` werkt altijd op één expliciet geselecteerde recovery-set. De
+functie hergebruikt eerst de opgeslagen playlist-ID, zoekt anders in de
+playlists van de huidige gebruiker naar exact dezelfde naam en maakt als
+laatste mogelijkheid een privéplaylist. Alleen unieke recovery-items met
+status `MATCHED` worden toegevoegd; opnieuw uitvoeren is veilig.
+
+```python
+sync_playlist(database, archive_set_name="Jaarcollectie")
 ```
