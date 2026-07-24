@@ -218,6 +218,12 @@ een eigen runmap onder `recovery`; de samengevoegde uitvoer blijft in
 `extracted`. Bestaande salvage-output en originele RAR-volumes worden nooit
 verwijderd of overschreven.
 
+Rebuilt/repaired multipart-sets worden als `COMPLETE`, `PARTIAL`,
+`SINGLE_VOLUME` of `INVALID` geclassificeerd. Iedere bruikbare herstelde bron
+wordt met beide tools geprobeerd, maar vervangt de originele set nooit: ook de
+originele volumes krijgen altijd beide extractiepogingen. Exitcode 0 bepaalt
+niet de eindstatus; de vergelijking met de verwachte MP3-inventaris doet dat.
+
 - `COMPLETE`: alle verwachte MP3’s zijn bruikbaar.
 - `SALVAGED`: niet volledig gerepareerd, maar alle MP3’s zijn gered.
 - `PARTIAL`: een deel is gered en recovery-items zijn nodig.

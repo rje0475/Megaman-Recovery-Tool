@@ -8,6 +8,16 @@ from core.external_tools import ToolResultaat, detecteer_winrar
 
 
 @dataclass(frozen=True)
+class HersteldeArchiveSet:
+    soort: str
+    classificatie: str
+    volumes: tuple[Path, ...]
+    eerste_volume: Path | None
+    verwacht_aantal: int
+    ontbrekende_delen: tuple[int, ...]
+
+
+@dataclass(frozen=True)
 class WinRarResultaat:
     status: str
     bronset: tuple[Path, ...]
@@ -21,6 +31,7 @@ class WinRarResultaat:
     gekozen_archive: Path
     foutmelding: str | None = None
     commando: tuple[str, ...] = ()
+    herstelde_sets: tuple[HersteldeArchiveSet, ...] = ()
 
 
 WINRAR_VOLLEDIG_EXITCODES = frozenset({0})
@@ -49,8 +60,53 @@ def _volume_sorteersleutel(pad):
     return (1, 0, naam.casefold())
 
 
-def vind_herstelde_volumes(workspace):
-    """Vind een complete, generiek benoemde rebuilt/repaired volumeset."""
+def _classificeer_genummerde_set(volumes, verwacht_aantal, soort):
+    volumes = tuple(sorted(volumes, key=lambda item: item[0]))
+    nummers = tuple(nummer for nummer, _ in volumes)
+    paden = tuple(pad for _, pad in volumes)
+    heeft_eerste = bool(nummers and nummers[0] in (0, 1))
+    if not heeft_eerste:
+        classificatie = "INVALID"
+    elif verwacht_aantal > 1 and len(paden) == 1:
+        classificatie = "SINGLE_VOLUME"
+    elif len(paden) == verwacht_aantal and (
+        nummers == tuple(range(1, verwacht_aantal + 1))
+        or nummers == tuple(range(0, verwacht_aantal))
+    ):
+        classificatie = "COMPLETE"
+    else:
+        classificatie = "PARTIAL"
+    start = 0 if nummers and nummers[0] == 0 else 1
+    verwacht = set(range(start, start + verwacht_aantal))
+    ontbrekend = tuple(sorted(verwacht - set(nummers)))
+    return HersteldeArchiveSet(
+        soort, classificatie, paden, paden[0] if heeft_eerste else None,
+        verwacht_aantal, ontbrekend,
+    )
+
+
+def classificeer_archive_set(volumes, verwacht_aantal, soort="origineel"):
+    genummerd = []
+    for pad in volumes:
+        pad = Path(pad)
+        part = re.search(r"\.part(\d+)\.rar$", pad.name, re.IGNORECASE)
+        oud = re.search(r"\.r(\d+)$", pad.name, re.IGNORECASE)
+        if part:
+            nummer = int(part.group(1))
+        elif pad.suffix.casefold() == ".rar":
+            nummer = 0
+        elif oud:
+            nummer = int(oud.group(1)) + 1
+        else:
+            continue
+        genummerd.append((nummer, pad))
+    return _classificeer_genummerde_set(
+        genummerd, verwacht_aantal, soort
+    )
+
+
+def vind_herstelde_sets(workspace, verwacht_aantal):
+    """Vind en classificeer alle generieke rebuilt/repaired volumesets."""
     groepen = {}
     patroon = re.compile(
         r"^(?P<markering>rebuilt[._]|repaired[._]?)(?P<origineel>.+)$",
@@ -66,10 +122,15 @@ def vind_herstelde_volumes(workspace):
         if not match:
             continue
         origineel = match.group("origineel")
+        soort = (
+            "rebuilt"
+            if match.group("markering").casefold().startswith("rebuilt")
+            else "repaired"
+        )
         part_match = part.match(origineel)
         if part_match:
             sleutel = (
-                match.group("markering").casefold(),
+                soort,
                 part_match.group("basis").casefold(),
             )
             groepen.setdefault(sleutel, []).append(
@@ -77,27 +138,32 @@ def vind_herstelde_volumes(workspace):
             )
         else:
             sleutel = (
-                match.group("markering").casefold(), Path(origineel).stem.casefold()
+                soort, Path(origineel).stem.casefold()
             )
             groepen.setdefault(sleutel, []).append((0, pad))
-    kandidaten = []
-    for volumes in groepen.values():
-        gesorteerd = tuple(
-            pad for _, pad in sorted(
-                volumes, key=lambda item: (
-                    item[0], item[1].name.casefold()
-                )
-            )
-        )
-        eerste_nummer = min(nummer for nummer, _ in volumes)
-        if eerste_nummer in (0, 1):
-            kandidaten.append(gesorteerd)
-    if not kandidaten:
-        return ()
-    return max(
-        kandidaten,
-        key=lambda volumes: (len(volumes), volumes[0].name.casefold()),
+    resultaten = tuple(
+        _classificeer_genummerde_set(volumes, verwacht_aantal, sleutel[0])
+        for sleutel, volumes in groepen.items()
     )
+    volgorde = {"COMPLETE": 0, "PARTIAL": 1, "SINGLE_VOLUME": 2, "INVALID": 3}
+    return tuple(sorted(
+        resultaten,
+        key=lambda item: (
+            volgorde[item.classificatie],
+            item.soort,
+            item.eerste_volume.name.casefold() if item.eerste_volume else "",
+        )
+    ))
+
+
+def vind_herstelde_volumes(workspace, verwacht_aantal=None):
+    """Compatibele helper: geef de beste bruikbare herstelde volumeset."""
+    verwacht_aantal = verwacht_aantal or 1
+    sets = vind_herstelde_sets(workspace, verwacht_aantal)
+    bruikbaar = tuple(
+        item for item in sets if item.classificatie != "INVALID"
+    )
+    return bruikbaar[0].volumes if bruikbaar else ()
 
 
 def voer_winrar_recovery_uit(
@@ -144,7 +210,11 @@ def voer_winrar_recovery_uit(
         ),
         key=_volume_sorteersleutel,
     ))
-    hersteld = vind_herstelde_volumes(workspace)
+    herstelde_sets = vind_herstelde_sets(workspace, len(volumes))
+    bruikbare_sets = tuple(
+        item for item in herstelde_sets if item.classificatie != "INVALID"
+    )
+    hersteld = bruikbare_sets[0].volumes if bruikbare_sets else ()
     gekozen = hersteld[0] if hersteld else werk_main
     if hersteld and exitcode in WINRAR_VOLLEDIG_EXITCODES:
         status = "SUCCESS"
@@ -160,5 +230,5 @@ def voer_winrar_recovery_uit(
     )
     return WinRarResultaat(
         status, volumes, workspace, main, exitcode, stdout, stderr,
-        gemaakt, hersteld, gekozen, fout, commando,
+        gemaakt, hersteld, gekozen, fout, commando, herstelde_sets,
     )

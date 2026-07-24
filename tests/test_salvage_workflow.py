@@ -15,13 +15,16 @@ from core.salvage_extractor import salvage_extract, winrar_salvage_extract
 from core.salvage_workflow import (
     ArchiveSet,
     SalvageFout,
+    _extractiefout_categorie,
     _resolveer_set_volumes,
     _synchroniseer_recovery,
     ontdek_archive_sets,
     voer_salvage_workflow_uit,
 )
 from core.winrar_recovery import (
+    classificeer_archive_set,
     vind_herstelde_volumes,
+    vind_herstelde_sets,
     voer_winrar_recovery_uit,
 )
 from database import (
@@ -169,6 +172,39 @@ class WinRarTest(unittest.TestCase):
                 "rebuilt.Andere Naam.part10.rar",
             ],
         )
+
+    def test_enkel_rebuilt_volume_tegenover_grote_bronset_is_single_volume(self):
+        workspace = self.root / "classificatie"
+        workspace.mkdir()
+        rebuilt = workspace / "rebuilt.Willekeurige Set.part01.rar"
+        rebuilt.write_bytes(b"x")
+        resultaat = vind_herstelde_sets(workspace, 82)
+        self.assertEqual(len(resultaat), 1)
+        self.assertEqual(resultaat[0].classificatie, "SINGLE_VOLUME")
+        self.assertEqual(resultaat[0].ontbrekende_delen[0], 2)
+        self.assertEqual(resultaat[0].ontbrekende_delen[-1], 82)
+
+    def test_complete_rebuilt_set_wordt_herkend(self):
+        workspace = self.root / "compleet"
+        workspace.mkdir()
+        for nummer in range(1, 5):
+            (workspace / f"repaired_Andere Set.part{nummer:03d}.rar").write_bytes(
+                b"x"
+            )
+        resultaat = vind_herstelde_sets(workspace, 4)
+        self.assertEqual(resultaat[0].classificatie, "COMPLETE")
+        self.assertEqual(len(resultaat[0].volumes), 4)
+
+    def test_ontbrekend_partnummer_wordt_gerapporteerd(self):
+        volumes = (
+            self.root / "Losse Set.part1.rar",
+            self.root / "Losse Set.part3.rar",
+        )
+        for volume in volumes:
+            volume.write_bytes(b"x")
+        resultaat = classificeer_archive_set(volumes, 3, "repaired")
+        self.assertEqual(resultaat.classificatie, "PARTIAL")
+        self.assertEqual(resultaat.ontbrekende_delen, (2,))
 class ExtractieTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -245,6 +281,30 @@ class ExtractieTest(unittest.TestCase):
         self.assertTrue((doel / "Week02" / "tweede.mp3").is_file())
         self.assertIn("-o-", eerste.commando)
         self.assertIn("-aos", tweede.commando)
+
+    def test_tooluitvoer_bepaalt_foutcategorie_niet_exitcode_alleen(self):
+        basis = {"exitcode": 6, "stdout": "", "foutmelding": None}
+        ontbrekend = SimpleNamespace(
+            **basis, stderr="Cannot find volume collection.part02.rar"
+        )
+        niet_open = SimpleNamespace(
+            **basis, stderr="Cannot open collection.part01.rar"
+        )
+        crc = SimpleNamespace(**basis, stderr="CRC error in track.mp3")
+        ander = SimpleNamespace(**basis, stderr="Unknown fatal error")
+        self.assertEqual(
+            _extractiefout_categorie(ontbrekend),
+            "ONTBREKEND_VERVOLGVOLUME",
+        )
+        self.assertEqual(
+            _extractiefout_categorie(niet_open), "BRON_NIET_GEOPEND"
+        )
+        self.assertEqual(
+            _extractiefout_categorie(crc), "CRC_OF_DATAFOUT"
+        )
+        self.assertEqual(
+            _extractiefout_categorie(ander), "ANDERE_TOOLFOUT"
+        )
 
 
 class ComparatorTest(unittest.TestCase):
@@ -467,21 +527,34 @@ class OrchestratorTest(unittest.TestCase):
     ):
         with tempfile.TemporaryDirectory() as tijdelijke_map:
             root = Path(tijdelijke_map)
-            archive = root / "Willekeurige Collectie.part1.rar"
-            archive.write_bytes(b"rar")
-            rebuilt = root / "rebuilt.Willekeurige Collectie.part1.rar"
+            originele_volumes = []
+            for nummer in range(1, 83):
+                volume = root / f"Willekeurige Collectie.part{nummer:02d}.rar"
+                volume.write_bytes(b"rar")
+                originele_volumes.append(volume)
+            archive = originele_volumes[0]
+            rebuilt = root / "rebuilt.Willekeurige Collectie.part01.rar"
             rebuilt.write_bytes(b"repaired")
             db_pad = root / "test.db"
             db = maak_database(db_pad)
             bewaar_rar_set(db, "willekeurige collectie", archive, True)
             vervang_rar_inventory_items(
-                db, "willekeurige collectie", archive, [{
-                    "verwacht_rel_pad": r"Week09\track.mp3",
-                    "verwacht_rel_pad_norm": r"week09\track.mp3",
-                    "verwachte_map": "Week09",
-                    "verwachte_bestandsnaam": "track.mp3",
-                    "verwachte_grootte": 3,
-                }]
+                db, "willekeurige collectie", archive, [
+                    {
+                        "verwacht_rel_pad": r"Week09\rebuilt.mp3",
+                        "verwacht_rel_pad_norm": r"week09\rebuilt.mp3",
+                        "verwachte_map": "Week09",
+                        "verwachte_bestandsnaam": "rebuilt.mp3",
+                        "verwachte_grootte": 3,
+                    },
+                    {
+                        "verwacht_rel_pad": r"Week10\original.mp3",
+                        "verwacht_rel_pad_norm": r"week10\original.mp3",
+                        "verwachte_map": "Week10",
+                        "verwachte_bestandsnaam": "original.mp3",
+                        "verwachte_grootte": 3,
+                    },
+                ]
             )
             db.verbinding.execute(
                 """
@@ -501,16 +574,23 @@ class OrchestratorTest(unittest.TestCase):
 
             def winrar_extractie(bron, doel, **kwargs):
                 fasen.append(("winrar", Path(bron)))
-                map_ = Path(doel) / "Week09"
+                rebuilt_bron = Path(bron).name.casefold().startswith("rebuilt")
+                map_ = Path(doel) / ("Week09" if rebuilt_bron else "Week10")
                 map_.mkdir(parents=True, exist_ok=True)
-                (map_ / "track.mp3").write_bytes(b"mp3")
+                naam = "rebuilt.mp3" if rebuilt_bron else "original.mp3"
+                (map_ / naam).write_bytes(b"mp3")
                 return SimpleNamespace(status="PARTIAL", exitcode=1)
 
             def zeven_extractie(bron, doel, **kwargs):
                 fasen.append(("7zip", Path(bron)))
-                self.assertTrue((Path(doel) / "Week09" / "track.mp3").is_file())
+                self.assertTrue(
+                    (Path(doel) / "Week09" / "rebuilt.mp3").is_file()
+                )
+                rebuilt_bron = Path(bron).name.casefold().startswith("rebuilt")
                 return SimpleNamespace(
-                    status="PARTIAL", exitcode=2, data_fouten=("CRC",)
+                    status="SUCCESS" if rebuilt_bron else "PARTIAL",
+                    exitcode=0 if rebuilt_bron else 2,
+                    data_fouten=() if rebuilt_bron else ("CRC",),
                 )
 
             def echte_vergelijking(verwacht, doel):
@@ -554,6 +634,8 @@ class OrchestratorTest(unittest.TestCase):
                 [
                     ("winrar", rebuilt),
                     ("7zip", rebuilt),
+                    ("winrar", archive),
+                    ("7zip", archive),
                     ("rescan", root / "megaman_salvage"
                      / "willekeurige_collectie" / "extracted"),
                 ],
@@ -564,9 +646,14 @@ class OrchestratorTest(unittest.TestCase):
             for fase in (
                 "Salvage-workflow gestart",
                 "WinRAR recovery exitcode: 3",
-                "Gekozen extractiebron: rebuilt",
-                "WinRAR-extractie resultaat: PARTIAL; exitcode=1",
-                "7-Zip salvage-extractie resultaat: PARTIAL; exitcode=2",
+                "Salvagebron: rebuilt",
+                "Salvagebron: origineel",
+                "Classificatie bron: SINGLE_VOLUME",
+                "Classificatie bron: COMPLETE",
+                "Ontbrekende volumes: 2, 3",
+                "Tool: RAR/WinRAR",
+                "Tool: 7-Zip",
+                "Nieuw teruggewonnen:",
                 "Extracted-map opnieuw gescand",
                 "Definitieve recovery-items: 0",
             ):

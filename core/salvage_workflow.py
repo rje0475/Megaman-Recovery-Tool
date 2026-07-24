@@ -8,7 +8,10 @@ from pathlib import Path
 from core.external_tools import detecteer_7zip, detecteer_winrar
 from core.salvage_compare import vergelijk_extractie
 from core.salvage_extractor import salvage_extract, winrar_salvage_extract
-from core.winrar_recovery import voer_winrar_recovery_uit
+from core.winrar_recovery import (
+    classificeer_archive_set,
+    voer_winrar_recovery_uit,
+)
 from database import DATABASE_BESTAND, SQLiteDatabase
 from paden import normaliseer_relatief_pad_sleutel
 from rar_inventory import groepeer_rar_sets
@@ -45,6 +48,79 @@ class SalvageFout(RuntimeError):
 
 def _toon_commando(commando):
     return subprocess.list2cmdline(list(commando)) if commando else "(geen)"
+
+
+def _mp3_stand(extractiemap):
+    mp3s = tuple(
+        pad for pad in Path(extractiemap).rglob("*")
+        if pad.is_file() and pad.suffix.casefold() == ".mp3"
+    )
+    nul = sum(
+        1 for pad in mp3s
+        if pad.stat().st_size == 0
+    )
+    return len(mp3s), nul
+
+
+def _tooluitvoer_samenvatting(resultaat, limiet=1200):
+    tekst = "\n".join(
+        deel.strip()
+        for deel in (
+            getattr(resultaat, "stdout", ""),
+            getattr(resultaat, "stderr", ""),
+            getattr(resultaat, "foutmelding", ""),
+        )
+        if deel and deel.strip()
+    )
+    if not tekst:
+        return "(geen toolmelding)"
+    tekst = " | ".join(regel.strip() for regel in tekst.splitlines() if regel.strip())
+    return tekst[:limiet] + ("…" if len(tekst) > limiet else "")
+
+
+def _extractiefout_categorie(resultaat):
+    tekst = _tooluitvoer_samenvatting(resultaat).casefold()
+    if any(term in tekst for term in (
+        "next volume", "missing volume", "cannot find volume",
+        "volgende volume", "ontbrekend volume",
+    )):
+        return "ONTBREKEND_VERVOLGVOLUME"
+    if any(term in tekst for term in (
+        "cannot open", "could not open", "failed to open", "niet openen",
+    )):
+        return "BRON_NIET_GEOPEND"
+    if any(term in tekst for term in (
+        "crc failed", "crc error", "checksum error", "data error",
+    )):
+        return "CRC_OF_DATAFOUT"
+    if getattr(resultaat, "exitcode", 0) not in (0, None):
+        return "ANDERE_TOOLFOUT"
+    return "GEEN"
+
+
+def _ontbrekende_delen_tekst(nummers, limiet=20):
+    nummers = tuple(nummers)
+    if not nummers:
+        return "geen"
+    begin = ", ".join(str(nummer) for nummer in nummers[:limiet])
+    rest = len(nummers) - limiet
+    return begin + (f" (+{rest} meer)" if rest > 0 else "")
+
+
+def _log_extractiepoging(
+    uitvoer, bron, toolnaam, resultaat, voor, na
+):
+    uitvoer.write(
+        f"Tool: {toolnaam}\n"
+        f"Exitcode: {getattr(resultaat, 'exitcode', None)}\n"
+        f"Status: {resultaat.status}\n"
+        f"MP3's vóór poging: {voor[0]}\n"
+        f"MP3's na poging: {na[0]}\n"
+        f"Nieuw teruggewonnen: {max(0, na[0] - voor[0])}\n"
+        f"Nieuwe nul-byte bestanden: {max(0, na[1] - voor[1])}\n"
+        f"Foutcategorie: {_extractiefout_categorie(resultaat)}\n"
+        f"Tooluitvoer: {_tooluitvoer_samenvatting(resultaat)}\n"
+    )
 
 
 def ontdek_archive_sets(bronmap, exclude=None):
@@ -405,47 +481,98 @@ def voer_salvage_workflow_uit(
                     set_.main_archive, None, "", "", (), (),
                     set_.main_archive, None,
                 )
-            gekozen = (
-                winrar.gekozen_archive
-                if winrar.status in ("SUCCESS", "PARTIAL")
-                else set_.main_archive
+            verwacht_volumeaantal = len(set_.volumes)
+            herstelde_sets = tuple(
+                getattr(winrar, "herstelde_sets", ()) or ()
             )
-            bron_keuze = (
-                "rebuilt" if gekozen != set_.main_archive else "origineel"
+            if not herstelde_sets and getattr(
+                winrar, "herstelde_volumes", ()
+            ):
+                herstelde_sets = (
+                    classificeer_archive_set(
+                        winrar.herstelde_volumes,
+                        verwacht_volumeaantal,
+                        "rebuilt",
+                    ),
+                )
+            origineel = classificeer_archive_set(
+                set_.volumes, verwacht_volumeaantal, "origineel"
             )
+            complete_hersteld = tuple(
+                bron for bron in herstelde_sets
+                if bron.classificatie == "COMPLETE"
+            )
+            aanvullende_bronnen = tuple(
+                bron for bron in herstelde_sets
+                if bron.classificatie in ("PARTIAL", "SINGLE_VOLUME")
+            )
+            ongeldige_bronnen = tuple(
+                bron for bron in herstelde_sets
+                if bron.classificatie == "INVALID"
+            )
+            # Herstelde bronnen kunnen unieke bestanden opleveren, maar de
+            # originele set wordt altijd daarna eveneens geprobeerd.
+            salvagebronnen = complete_hersteld + aanvullende_bronnen + (origineel,)
+            for bron in ongeldige_bronnen:
+                uitvoer.write(
+                    f"Salvagebron {bron.soort}: INVALID; overgeslagen; "
+                    f"ontbrekende volumes: "
+                    f"{_ontbrekende_delen_tekst(bron.ontbrekende_delen)}\n"
+                )
             uitvoer.write(
-                f"Gekozen extractiebron: {bron_keuze}\n"
-                f"Eerste volume van gekozen set: {gekozen}\n"
+                f"Salvagebronnen gepland: {len(salvagebronnen)}\n"
             )
             winrar_kwargs = {"tool": winrar_tool}
             if winrar_runner:
                 winrar_kwargs["runner"] = winrar_runner
-            uitvoer.write("WinRAR-extractie gestart\n")
-            winrar_extractie = winrar_salvage_extract(
-                gekozen, extracted, **winrar_kwargs
-            )
-            uitvoer.write(
-                f"WinRAR-extractie commando: "
-                f"{_toon_commando(getattr(winrar_extractie, 'commando', ()))}\n"
-                f"WinRAR-extractie resultaat: {winrar_extractie.status}; "
-                f"exitcode={winrar_extractie.exitcode}\n"
-            )
-            kwargs = {"tool": zeven_tool}
+            sevenzip_kwargs = {"tool": zeven_tool}
             if sevenzip_runner:
-                kwargs["runner"] = sevenzip_runner
-            uitvoer.write(
-                f"7-Zip executable: {zeven_tool.pad or 'niet gevonden'}\n"
-                "7-Zip salvage-extractie gestart\n"
-            )
-            extractie = salvage_extract(gekozen, extracted, **kwargs)
-            uitvoer.write(
-                f"7-Zip salvage-extractie commando: "
-                f"{_toon_commando(getattr(extractie, 'commando', ()))}\n"
-                f"7-Zip salvage-extractie resultaat: {extractie.status}; "
-                f"exitcode={getattr(extractie, 'exitcode', None)}\n"
-                f"Extractiefouten: "
-                f"{len(getattr(extractie, 'data_fouten', ()))}\n"
-            )
+                sevenzip_kwargs["runner"] = sevenzip_runner
+            extractie = None
+            gekozen = set_.main_archive
+            for bron in salvagebronnen:
+                gekozen = bron.eerste_volume
+                uitvoer.write(
+                    f"\nSalvagebron: {bron.soort}\n"
+                    f"Classificatie bron: {bron.classificatie}\n"
+                    f"Aantal volumes in bron: {len(bron.volumes)}\n"
+                    f"Verwacht aantal volumes: {bron.verwacht_aantal}\n"
+                    f"Eerste volume: {bron.eerste_volume}\n"
+                    f"Ontbrekende volumes: "
+                    f"{_ontbrekende_delen_tekst(bron.ontbrekende_delen)}\n"
+                )
+                voor = _mp3_stand(extracted)
+                uitvoer.write("WinRAR-extractie gestart\n")
+                winrar_extractie = winrar_salvage_extract(
+                    bron.eerste_volume, extracted, **winrar_kwargs
+                )
+                na = _mp3_stand(extracted)
+                uitvoer.write(
+                    f"WinRAR-extractie commando: "
+                    f"{_toon_commando(getattr(winrar_extractie, 'commando', ()))}\n"
+                )
+                _log_extractiepoging(
+                    uitvoer, bron, "RAR/WinRAR", winrar_extractie, voor, na
+                )
+
+                voor = na
+                uitvoer.write(
+                    f"7-Zip executable: {zeven_tool.pad or 'niet gevonden'}\n"
+                    "7-Zip salvage-extractie gestart\n"
+                )
+                extractie = salvage_extract(
+                    bron.eerste_volume, extracted, **sevenzip_kwargs
+                )
+                na = _mp3_stand(extracted)
+                uitvoer.write(
+                    f"7-Zip salvage-extractie commando: "
+                    f"{_toon_commando(getattr(extractie, 'commando', ()))}\n"
+                )
+                _log_extractiepoging(
+                    uitvoer, bron, "7-Zip", extractie, voor, na
+                )
+            if extractie is None:
+                raise SalvageFout("Geen bruikbare salvagebronnen gevonden.")
             verwacht = [
                 dict(r) for r in database.verbinding.execute(
                     """
