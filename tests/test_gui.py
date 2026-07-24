@@ -180,6 +180,18 @@ class MainWindowTest(unittest.TestCase):
         vraag.assert_called_once()
         self.assertEqual(_FakeWorker.instances, [])
 
+    def test_salvage_vraagt_bevestiging(self):
+        with tempfile.TemporaryDirectory() as tijdelijke_map:
+            self.venster.map_invoer.setText(tijdelijke_map)
+            with patch.object(
+                QMessageBox, "question",
+                return_value=QMessageBox.StandardButton.No,
+            ) as vraag:
+                self.venster._salvage()
+        vraag.assert_called_once()
+        self.assertIn("Originele archieven", vraag.call_args.args[2])
+        self.assertEqual(_FakeWorker.instances, [])
+
     def test_knoppen_tijdens_actie_uit_en_daarna_aan(self):
         toestanden = []
 

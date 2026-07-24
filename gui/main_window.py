@@ -33,6 +33,7 @@ from spotify_smart import (
     markeer_geen_kandidaat,
     voer_spotify_smart_uit,
 )
+from core.salvage_workflow import voer_salvage_workflow_uit
 
 
 STATISTIEKEN = (
@@ -133,9 +134,12 @@ class MegamanMainWindow(QMainWindow):
         self.repareren_knop = QPushButton("Repareren")
         self.uitpakken_knop = QPushButton("Uitpakken")
         self.rapport_knop = QPushButton("Rapport tonen")
+        self.salvage_knop = QPushButton("RAR-set herstellen en uitpakken")
+        self.extractiemap_knop = QPushButton("Extractiemap openen")
+        self.extractiemap_knop.setEnabled(False)
         self.actieknoppen = (
             self.analyseren_knop, self.repareren_knop,
-            self.uitpakken_knop, self.rapport_knop,
+            self.uitpakken_knop, self.rapport_knop, self.salvage_knop,
         )
         for knop in self.actieknoppen:
             actierij.addWidget(knop)
@@ -145,6 +149,8 @@ class MegamanMainWindow(QMainWindow):
         self.repareren_knop.clicked.connect(self._repareer)
         self.uitpakken_knop.clicked.connect(self._pak_uit)
         self.rapport_knop.clicked.connect(self._rapport)
+        self.salvage_knop.clicked.connect(self._salvage)
+        self.extractiemap_knop.clicked.connect(self._open_extractiemap)
 
         statistieken = QGridLayout()
         self.statistiek_labels = {}
@@ -273,6 +279,32 @@ class MegamanMainWindow(QMainWindow):
     def _rapport(self):
         self._start_actie("Rapport tonen", _toon_rapport)
 
+    def _salvage(self):
+        map_pad = self._geldige_map()
+        if map_pad is None:
+            return
+        workspace = map_pad / "megaman_salvage"
+        antwoord = QMessageBox.question(
+            self, "Salvage bevestigen",
+            f"Bronmap: {map_pad}\nWorkspace: {workspace}\n"
+            "Extracties: <workspace>/<RAR-set>/extracted\n\n"
+            "Originele archieven worden niet gewijzigd. Doorgaan?",
+        )
+        if antwoord == QMessageBox.StandardButton.Yes:
+            self._start_actie(
+                "RAR-set herstellen en uitpakken",
+                voer_salvage_workflow_uit, map_pad, workspace,
+            )
+
+    def _open_extractiemap(self):
+        pad = getattr(self, "_laatste_extractiemap", None)
+        if pad and Path(pad).is_dir():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(pad))))
+        else:
+            QMessageBox.warning(
+                self, "Geen extractiemap", "Er is nog geen extractiemap."
+            )
+
     def _start_actie(self, naam, actie, *args):
         self._zet_actief(False)
         self.voortgang.setValue(0)
@@ -282,9 +314,7 @@ class MegamanMainWindow(QMainWindow):
         self.worker.log.connect(self._log)
         self.worker.progress.connect(self.voortgang.setValue)
         self.worker.succeeded.connect(
-            lambda resultaat: self.statusregel.setText(
-                f"{naam} voltooid."
-            )
+            lambda resultaat: self._actie_geslaagd(naam, resultaat)
         )
         self.worker.failed.connect(self._actie_mislukt)
         self.worker.completed.connect(self._actie_afgerond)
@@ -303,6 +333,12 @@ class MegamanMainWindow(QMainWindow):
         self.logvenster.appendPlainText(f"FOUT: {melding}")
         QMessageBox.critical(self, "Actie mislukt", melding)
 
+    def _actie_geslaagd(self, naam, resultaat):
+        self.statusregel.setText(f"{naam} voltooid.")
+        if naam == "RAR-set herstellen en uitpakken" and resultaat:
+            self._laatste_extractiemap = resultaat[-1].extractiemap
+            self.extractiemap_knop.setEnabled(True)
+
     def _actie_afgerond(self):
         self._zet_actief(True)
         self.vernieuw_statistieken()
@@ -313,6 +349,9 @@ class MegamanMainWindow(QMainWindow):
         self.map_invoer.setEnabled(actief)
         for knop in self.actieknoppen:
             knop.setEnabled(actief)
+        self.extractiemap_knop.setEnabled(
+            actief and bool(getattr(self, "_laatste_extractiemap", None))
+        )
 
     def vernieuw_statistieken(self):
         try:

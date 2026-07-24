@@ -7,6 +7,7 @@ from database import DATABASE_BESTAND
 from par2_repair import Par2RepairFout
 from rar_extractor import ExtractieFout
 from spotify_smart import SpotifyZoekFout
+from core.salvage_workflow import SalvageFout
 
 
 BANNER = (
@@ -32,6 +33,7 @@ def maak_parser():
             "  python main.py --repair \"C:\\pad\\naar\\map\"\n"
             "  python main.py --spotify-search \"C:\\pad\\naar\\map\"\n"
             "  python main.py --spotify-retry \"C:\\pad\\naar\\map\"\n"
+            "  python main.py --salvage-rar \"C:\\pad\\naar\\map\"\n"
             "  python main.py --extract \"C:\\pad\\naar\\downloadmap\"\n"
             "  python main.py --demo\n"
             "  python main.py --report"
@@ -39,6 +41,16 @@ def maak_parser():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     acties = parser.add_mutually_exclusive_group()
+    acties.add_argument(
+        "--salvage-rar",
+        metavar="MAP",
+        help="herstel en pak RAR-sets fouttolerant uit",
+    )
+    parser.add_argument("--workspace", metavar="MAP")
+    parser.add_argument("--rar-set", metavar="NAAM")
+    parser.add_argument("--skip-par2", action="store_true")
+    parser.add_argument("--skip-winrar", action="store_true")
+    parser.add_argument("--no-spotify", action="store_true")
     acties.add_argument(
         "--spotify-search",
         metavar="MAP",
@@ -132,6 +144,13 @@ def _interactieve_paden(invoer):
 def main(argv=None, invoer=input, uitvoer=None):
     uitvoer = uitvoer or sys.stdout
     args = maak_parser().parse_args(argv)
+    if (
+        args.workspace or args.rar_set or args.skip_par2
+        or args.skip_winrar or args.no_spotify
+    ) and not args.salvage_rar:
+        maak_parser().error(
+            "salvage-opties horen bij --salvage-rar"
+        )
     uitvoer.write(BANNER + "\n")
     try:
         if args.gui:
@@ -147,6 +166,25 @@ def main(argv=None, invoer=input, uitvoer=None):
             return 0
         if args.report:
             return toon_laatste_rapport(uitvoer=uitvoer)
+        if args.salvage_rar:
+            from core.salvage_workflow import voer_salvage_workflow_uit
+            resultaten = voer_salvage_workflow_uit(
+                Path(args.salvage_rar.strip('"')),
+                workspace=(
+                    Path(args.workspace.strip('"')) if args.workspace else None
+                ),
+                rar_set=args.rar_set,
+                skip_par2=args.skip_par2,
+                skip_winrar=args.skip_winrar,
+                no_spotify=args.no_spotify,
+                uitvoer=uitvoer,
+            )
+            statussen = {resultaat.eindstatus for resultaat in resultaten}
+            return (
+                2 if "FAILED" in statussen
+                else 1 if "PARTIAL" in statussen
+                else 0
+            )
         if args.spotify_search or args.spotify_retry:
             from spotify_smart import voer_spotify_smart_uit
             overzicht = voer_spotify_smart_uit(
@@ -178,7 +216,7 @@ def main(argv=None, invoer=input, uitvoer=None):
         return 0
     except (
         AnalyseFout, ExtractieFout, Par2RepairFout, SpotifyZoekFout,
-        OSError, ValueError
+        SalvageFout, OSError, ValueError
     ) as fout:
         uitvoer.write(f"FOUT: {fout}\n")
         return 1

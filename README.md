@@ -195,3 +195,29 @@ overschreven. De tool gebruikt bewust geen YouTube: benamingen en versies zijn
 daarvoor onvoldoende betrouwbaar. Spotify-kandidaten, scores, zoekopdrachten
 en keuzes blijven lokaal in SQLite; credentials worden niet opgeslagen of
 gelogd. Deze workflow wijzigt geen MP3-bestanden.
+
+# Fouttolerante RAR-salvage
+
+`NOT_REPAIRABLE` betekent niet dat niets meer gered kan worden. Na PAR2
+probeert de salvage-workflow zo nodig WinRAR-recovery en pakt daarna met 7-Zip
+altijd zoveel mogelijk bestanden uit:
+
+```powershell
+python main.py --salvage-rar "C:\downloads"
+python main.py --salvage-rar "C:\downloads" --workspace "D:\recovery"
+python main.py --salvage-rar "C:\downloads" --rar-set "megaman2006"
+python main.py --salvage-rar "C:\downloads" --skip-par2 --skip-winrar
+```
+
+Stel afwijkende toolpaden in met `WINRAR_PATH` en `SEVENZIP_PATH`. Anders
+worden standaardinstallaties en daarna PATH doorzocht. Iedere set krijgt een
+geïsoleerde `recovery`- en `extracted`-map onder `megaman_salvage`. Originele
+RAR-volumes worden nooit overschreven.
+
+- `COMPLETE`: alle verwachte MP3’s zijn bruikbaar.
+- `SALVAGED`: niet volledig gerepareerd, maar alle MP3’s zijn gered.
+- `PARTIAL`: een deel is gered en recovery-items zijn nodig.
+- `FAILED`: niets bruikbaars kon worden uitgepakt.
+
+De volledige vergelijking blijft in SQLite; console en GUI tonen compacte
+aantallen. Handmatige Spotify-keuzes blijven behouden.

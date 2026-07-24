@@ -223,6 +223,33 @@ def maak_rapport(map_pad, database):
             f.write(f"Bron {bron}: {aantal}\n")
         f.write("\n")
 
+        f.write("SALVAGE WORKFLOW\n")
+        f.write("------------------------------\n")
+        salvage_runs = database.verbinding.execute(
+            """
+            SELECT * FROM salvage_runs
+            WHERE id IN (
+              SELECT MAX(id) FROM salvage_runs GROUP BY rar_set_key
+            )
+            ORDER BY rar_set_key
+            """
+        )
+        for run in salvage_runs:
+            f.write(
+                f"{run['rar_set_key']}: bron={run['source_status']} | "
+                f"PAR2={run['par2_result']} | "
+                f"WinRAR={run['winrar_result']} | "
+                f"7-Zip={run['sevenzip_result']} | "
+                f"OK={run['ok_count']} MISSING={run['missing_count']} "
+                f"ZERO_BYTE={run['zero_byte_count']} "
+                f"UNREADABLE={run['unreadable_count']} "
+                f"SIZE_MISMATCH={run['size_mismatch_count']} "
+                f"EXTRA={run['extra_count']} | "
+                f"recovery={run['recovery_item_count']} | "
+                f"{run['final_status']}\n"
+            )
+        f.write("\n")
+
         for item in recovery_items:
             if item["bepaalde_titel"] is None:
                 reden = (
