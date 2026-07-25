@@ -458,27 +458,31 @@ class MegamanMainWindow(QMainWindow):
     def _review_finished(self, result):
         self.review_active = False
         accepted = result == QDialog.DialogCode.Accepted
-        if result == QDialog.DialogCode.Accepted:
-            self.statusregel.setText(
-                "Recovery Review opgeslagen; workflow wordt hervat."
+        try:
+            if accepted:
+                self.statusregel.setText(
+                    "Recovery Review opgeslagen; workflow wordt hervat."
+                )
+                self._append_log(
+                    "Recovery Review opgeslagen. "
+                    "Er is geen playlist aangemaakt."
+                )
+            else:
+                self.statusregel.setText(
+                    "Recovery Review gesloten; workflow wordt hervat."
+                )
+                self._append_log(
+                    "Recovery Review gesloten; "
+                    "er is geen playlist aangemaakt."
+                )
+            self.huidige_stap_label.setText("Recovery Review")
+            self.huidige_activiteit_label.setText(
+                "Backendworkflow hervatten"
             )
-            self._append_log(
-                "Recovery Review opgeslagen. Er is geen playlist aangemaakt."
-            )
-        else:
-            self.statusregel.setText(
-                "Recovery Review gesloten; workflow wordt hervat."
-            )
-            self._append_log(
-                "Recovery Review gesloten; er is geen playlist aangemaakt."
-            )
-        self.huidige_stap_label.setText("Recovery Review")
-        self.huidige_activiteit_label.setText(
-            "Backendworkflow hervatten"
-        )
-        self.review_dialog = None
-        if self.workflow_worker is not None:
-            self.workflow_worker.resolve_review(accepted)
+            self.review_dialog = None
+        finally:
+            if self.workflow_worker is not None:
+                self.workflow_worker.resolve_review(accepted)
 
     def _workflow_failed(self, error):
         for stage, label in self.stage_labels.items():

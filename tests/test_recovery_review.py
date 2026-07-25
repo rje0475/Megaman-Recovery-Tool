@@ -11,6 +11,8 @@ from PySide6.QtWidgets import QApplication
 from core.recovery_review import (
     bewaar_recovery_review,
     laad_recovery_review,
+    selecteer_spotify_kandidaat,
+    versie_waarschuwingen,
 )
 from database import maak_database, verkrijg_of_maak_recovery_set
 from gui.recovery_review import RecoveryReviewDialog
@@ -45,7 +47,7 @@ class RecoveryReviewTest(unittest.TestCase):
             spotify_status="LOW_CONFIDENCE",
         )
         self.candidate_ids = (
-            self._candidate(self.matched, "one", 0.98, selected=1),
+            self._candidate(self.matched, "one", 0.98),
             self._candidate(self.matched, "two", 0.91),
         )
         self.db.verbinding.commit()
@@ -80,25 +82,29 @@ class RecoveryReviewTest(unittest.TestCase):
         )
         return cursor.lastrowid
 
-    def _candidate(self, item_id, track_id, score, selected=0):
+    def _candidate(
+        self, item_id, track_id, score, selected=0,
+        artist="Delain", title="Frozen",
+    ):
         cursor = self.db.verbinding.execute(
             """
             INSERT INTO spotify_candidates (
               recovery_item_id, spotify_track_id, spotify_uri, spotify_url,
               artist, title, album, album_cover_url, duration_ms, popularity,
+              release_date,
               total_score, artist_score, title_score, version_score,
               duration_score, rank_number, search_strategy, search_query,
               selected, rejected, score_reason
             ) VALUES (
-              ?, ?, ?, ?, 'Delain', 'Frozen', 'Lucidity', NULL,
-              240000, 70, ?, .99, .99, 1, 1, 1,
+              ?, ?, ?, ?, ?, ?, 'Lucidity', NULL,
+              240000, 70, '2006-09-04', ?, .99, .99, 1, 1, 1,
               'FIELD_FILTERS', 'query', ?, 0, 'goed'
             )
             """,
             (
                 item_id, track_id, f"spotify:track:{track_id}",
                 f"https://open.spotify.com/track/{track_id}",
-                score, selected,
+                artist, title, score, selected,
             ),
         )
         return cursor.lastrowid
@@ -165,7 +171,7 @@ class RecoveryReviewTest(unittest.TestCase):
             dialog._select_all()
             self.assertTrue(dialog.continue_button.isEnabled())
             self.assertIn(
-                "Selected for playlist: 3",
+                "Aangevinkt: 3",
                 dialog.summary_label.text(),
             )
             dialog._invert_selection()
@@ -188,6 +194,208 @@ class RecoveryReviewTest(unittest.TestCase):
             self.assertFalse(dialog.youtube_button.isEnabled())
         finally:
             dialog.reject()
+
+    def test_hoge_confidence_wordt_automatisch_gekozen(self):
+        items = laad_recovery_review(self.db, self.set_id)
+        item = next(item for item in items if item.id == self.matched)
+        self.assertEqual(item.selected_candidate_id, self.candidate_ids[0])
+        rij = self.db.verbinding.execute(
+            "SELECT * FROM recovery_items WHERE id=?", (self.matched,)
+        ).fetchone()
+        self.assertEqual(rij["match_review_status"], "AUTO_SELECTED")
+        self.assertEqual(rij["selected_spotify_uri"], "spotify:track:one")
+
+    def test_low_confidence_en_bijna_gelijke_matches_niet_auto(self):
+        low_candidate = self._candidate(
+            self.zero, "low", 0.93,
+            artist="Kelly Rowland", title="Like This",
+        )
+        tweede = self._candidate(
+            self.missing, "close-1", 0.98,
+            artist="Natasha Bedingfield", title="Soulmate",
+        )
+        self._candidate(
+            self.missing, "close-2", 0.97,
+            artist="Natasha Bedingfield", title="Soulmate",
+        )
+        self.db.verbinding.execute(
+            "UPDATE recovery_items SET spotify_status='MATCHED' WHERE id=?",
+            (self.missing,),
+        )
+        self.db.verbinding.commit()
+        items = {
+            item.id: item
+            for item in laad_recovery_review(self.db, self.set_id)
+        }
+        self.assertIsNone(items[self.zero].selected_candidate_id)
+        self.assertIsNone(items[self.missing].selected_candidate_id)
+        self.assertIsNotNone(low_candidate)
+        self.assertIsNotNone(tweede)
+
+    def test_handmatige_keuze_blijft_na_heropenen_bewaard(self):
+        selecteer_spotify_kandidaat(
+            self.db, self.matched, self.candidate_ids[1]
+        )
+        eerste = laad_recovery_review(self.db, self.set_id)
+        tweede = laad_recovery_review(self.db, self.set_id)
+        for items in (eerste, tweede):
+            item = next(item for item in items if item.id == self.matched)
+            self.assertEqual(
+                item.selected_candidate_id, self.candidate_ids[1]
+            )
+            self.assertEqual(item.match_review_status, "USER_SELECTED")
+
+    def test_checkbox_blijft_na_heropenen_bewaard(self):
+        dialog = RecoveryReviewDialog(
+            self.set_id, "Jaarcollectie",
+            database_factory=maak_database,
+            database_path=self.path,
+        )
+        row = next(
+            row for row in range(dialog.table.rowCount())
+            if dialog._item_for_row(row).id == self.matched
+        )
+        dialog.table.item(row, 0).setCheckState(Qt.CheckState.Checked)
+        dialog.reject()
+        heropend = RecoveryReviewDialog(
+            self.set_id, "Jaarcollectie",
+            database_factory=maak_database,
+            database_path=self.path,
+        )
+        try:
+            row = next(
+                row for row in range(heropend.table.rowCount())
+                if heropend._item_for_row(row).id == self.matched
+            )
+            self.assertEqual(
+                heropend.table.item(row, 0).checkState(),
+                Qt.CheckState.Checked,
+            )
+        finally:
+            heropend.reject()
+
+    def test_versieconflicten_worden_herkend(self):
+        self.assertIn(
+            "Versie wijkt mogelijk af",
+            versie_waarschuwingen(
+                "Artist - Track (Radio Edit).mp3",
+                "Track",
+            ),
+        )
+        self.assertIn(
+            "Live-versie",
+            versie_waarschuwingen("Artist - Track.mp3", "Track Live"),
+        )
+        self.assertIn(
+            "Andere remix mogelijk",
+            versie_waarschuwingen(
+                "Track (DJ One Remix).mp3",
+                "Track (DJ Two Remix)",
+            ),
+        )
+        self.assertNotIn(
+            "Andere remix mogelijk",
+            versie_waarschuwingen(
+                "Artist - Track (DJ One Remix).mp3",
+                "Track (DJ One Remix)",
+            ),
+        )
+
+    def test_filters_zoeken_sorteren_en_realtime_tellingen(self):
+        dialog = RecoveryReviewDialog(
+            self.set_id, "Jaarcollectie",
+            database_factory=maak_database,
+            database_path=self.path,
+        )
+        try:
+            dialog.search_field.setText("Natasha")
+            zichtbaar = [
+                dialog._item_for_row(row).id
+                for row in dialog._visible_rows()
+            ]
+            self.assertEqual(zichtbaar, [self.missing])
+            dialog.search_field.clear()
+            dialog.filter_combo.setCurrentText("FFmpeg-fout")
+            self.assertEqual(
+                [
+                    dialog._item_for_row(row).id
+                    for row in dialog._visible_rows()
+                ],
+                [self.matched],
+            )
+            dialog.filter_combo.setCurrentText("Alles")
+            dialog.table.sortItems(
+                3, Qt.SortOrder.DescendingOrder
+            )
+            posities = [
+                dialog._item_for_row(row).chart_position
+                for row in range(dialog.table.rowCount())
+            ]
+            self.assertEqual(posities, sorted(posities, reverse=True))
+            dialog._select_all()
+            self.assertIn("Aangevinkt: 3", dialog.summary_label.text())
+            self.assertIn(
+                "Klaar voor playlist: 1", dialog.summary_label.text()
+            )
+        finally:
+            dialog.reject()
+
+    def test_continue_valideert_en_kan_ongematchte_deselecteren(self):
+        dialog = RecoveryReviewDialog(
+            self.set_id, "Jaarcollectie",
+            database_factory=maak_database,
+            database_path=self.path,
+        )
+        dialog._select_all()
+        dialog._vraag_onvolledige_selectie = lambda aantal: (
+            "deselect" if aantal == 2 else "back"
+        )
+        dialog._continue()
+        controle = maak_database(self.path)
+        try:
+            selected = controle.verbinding.execute(
+                """
+                SELECT COUNT(*) aantal FROM recovery_items
+                WHERE recovery_set_id=? AND playlist_selected=1
+                """,
+                (self.set_id,),
+            ).fetchone()["aantal"]
+            self.assertEqual(selected, 1)
+            self.assertIsNone(
+                controle.verbinding.execute(
+                    "SELECT spotify_playlist_id FROM recovery_sets WHERE id=?",
+                    (self.set_id,),
+                ).fetchone()["spotify_playlist_id"]
+            )
+        finally:
+            controle.sluit()
+
+    def test_migraties_bevatten_reviewkolommen(self):
+        recovery_columns = {
+            rij["name"]
+            for rij in self.db.verbinding.execute(
+                "PRAGMA table_info(recovery_items)"
+            )
+        }
+        self.assertTrue({
+            "selected_spotify_candidate_id",
+            "selected_spotify_uri",
+            "selected_spotify_track_id",
+            "selected_spotify_artist",
+            "selected_spotify_title",
+            "selected_spotify_album",
+            "selected_spotify_duration_ms",
+            "selected_spotify_confidence",
+            "match_review_status",
+            "match_reviewed_at",
+        } <= recovery_columns)
+        candidate_columns = {
+            rij["name"]
+            for rij in self.db.verbinding.execute(
+                "PRAGMA table_info(spotify_candidates)"
+            )
+        }
+        self.assertIn("release_date", candidate_columns)
 
     def test_continue_slaat_op_zonder_playlistactie(self):
         dialog = RecoveryReviewDialog(

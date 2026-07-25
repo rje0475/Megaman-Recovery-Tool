@@ -130,17 +130,19 @@ def _bewaar_kandidaten(
             INSERT INTO spotify_candidates (
               recovery_item_id, spotify_track_id, spotify_uri, spotify_url,
               artist, title, album, album_cover_url, duration_ms, popularity,
+              release_date,
               total_score, artist_score, title_score, version_score,
               duration_score, rank_number, search_strategy, search_query,
               selected, rejected, score_reason
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?,
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?,
                       '', 0, 0, '')
             """,
             (
                 item_id, track.track_id, track.uri, track.url,
                 ", ".join(track.artists), track.title, track.album,
                 track.album_cover_url, track.duration_ms, track.popularity,
-                score, details.primary_artist, details.title,
+                track.release_date, score,
+                details.primary_artist, details.title,
                 details.duration, rang, methode,
             ),
         )

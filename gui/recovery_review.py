@@ -1,17 +1,19 @@
-"""Recovery Review Wizard between Spotify Search and playlist creation."""
+"""Recovery Review Wizard tussen Spotify Search en playlistcreatie."""
 
 from functools import partial
 
 from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QDesktopServices, QPixmap
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QComboBox,
     QDialog,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QPushButton,
     QRadioButton,
@@ -26,6 +28,8 @@ from PySide6.QtWidgets import (
 from core.recovery_review import (
     bewaar_recovery_review,
     laad_recovery_review,
+    selecteer_spotify_kandidaat,
+    stel_playlist_selectie_in,
 )
 from database import DATABASE_BESTAND, SQLiteDatabase
 
@@ -40,7 +44,38 @@ KOLOMMEN = (
     "Titel",
     "Status",
     "Spotify-status",
+    "Confidence",
 )
+FILTERS = (
+    "Alles",
+    "Klaar voor playlist",
+    "Nog te beoordelen",
+    "Geen match",
+    "Low confidence",
+    "FFmpeg-fout",
+    "0-byte",
+    "Missing",
+)
+
+
+class SorteerItem(QTableWidgetItem):
+    def __init__(self, waarde=None, tekst=None):
+        super().__init__(
+            "—" if waarde in (None, "") else str(waarde)
+            if tekst is None else tekst
+        )
+        self.setData(Qt.ItemDataRole.UserRole + 1, waarde)
+
+    def __lt__(self, other):
+        links = self.data(Qt.ItemDataRole.UserRole + 1)
+        rechts = other.data(Qt.ItemDataRole.UserRole + 1)
+        if links is None:
+            return False
+        if rechts is None:
+            return True
+        if isinstance(links, str) or isinstance(rechts, str):
+            return str(links).casefold() < str(rechts).casefold()
+        return links < rechts
 
 
 class RecoveryReviewDialog(QDialog):
@@ -51,28 +86,20 @@ class RecoveryReviewDialog(QDialog):
         super().__init__(parent)
         self.recovery_set_id = int(recovery_set_id)
         self.recovery_set_name = recovery_set_name
-        self.database_factory = database_factory
-        self.database_path = database_path
         self.database = database_factory(database_path)
         self.items = laad_recovery_review(
             self.database, self.recovery_set_id
         )
+        self._items_by_id = {item.id: item for item in self.items}
+        self._candidate_choice = {
+            item.id: item.selected_candidate_id for item in self.items
+        }
         self._candidate_groups = {}
         self._retired_candidate_widgets = []
-        self._candidate_choice = {
-            item.id: next(
-                (
-                    kandidaat.id
-                    for kandidaat in item.candidates
-                    if kandidaat.selected
-                ),
-                None,
-            )
-            for item in self.items
-        }
         self._network = QNetworkAccessManager(self)
+        self._building_table = False
         self.setWindowTitle(f"Recovery Review — {recovery_set_name}")
-        self.resize(1280, 760)
+        self.resize(1360, 800)
         self.setModal(True)
         self._bouw_interface()
         self._vul_tabel()
@@ -82,7 +109,8 @@ class RecoveryReviewDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel(
             f"Recovery Review: {self.recovery_set_name}\n"
-            "Beoordeel de vervangingen. Er wordt nog geen playlist gemaakt."
+            "Kies de juiste Spotify-match en playlistselectie. "
+            "Er wordt nog geen playlist gemaakt."
         ))
 
         selectie = QHBoxLayout()
@@ -94,7 +122,19 @@ class RecoveryReviewDialog(QDialog):
             knop = QPushButton(tekst)
             knop.clicked.connect(actie)
             selectie.addWidget(knop)
-        selectie.addStretch(1)
+        selectie.addSpacing(20)
+        selectie.addWidget(QLabel("Filter:"))
+        self.filter_combo = QComboBox()
+        self.filter_combo.addItems(FILTERS)
+        self.filter_combo.currentTextChanged.connect(self._apply_filter)
+        selectie.addWidget(self.filter_combo)
+        selectie.addWidget(QLabel("Zoeken:"))
+        self.search_field = QLineEdit()
+        self.search_field.setPlaceholderText(
+            "Bestandsnaam, artiest, titel, week of positie"
+        )
+        self.search_field.textChanged.connect(self._apply_filter)
+        selectie.addWidget(self.search_field, stretch=1)
         layout.addLayout(selectie)
 
         splitter = QSplitter()
@@ -106,6 +146,7 @@ class RecoveryReviewDialog(QDialog):
         self.table.setSelectionMode(
             QTableWidget.SelectionMode.SingleSelection
         )
+        self.table.setSortingEnabled(True)
         self.table.itemSelectionChanged.connect(self._toon_selectie)
         self.table.itemChanged.connect(self._item_changed)
         self.table.horizontalHeader().setStretchLastSection(True)
@@ -118,8 +159,12 @@ class RecoveryReviewDialog(QDialog):
         self.detail_labels = {}
         detail_grid = QGridLayout()
         for rij, (key, label) in enumerate((
+            ("year", "Jaar"),
             ("week", "Week"),
             ("position", "Chartpositie"),
+            ("artist", "Artiest"),
+            ("title", "Titel"),
+            ("version", "Versie"),
             ("filename", "Originele bestandsnaam"),
             ("recovery", "Recovery status"),
             ("spotify", "Spotify status"),
@@ -134,13 +179,20 @@ class RecoveryReviewDialog(QDialog):
         self.candidates_box = QGroupBox("Spotify-resultaten")
         self.candidates_layout = QVBoxLayout(self.candidates_box)
         self.detail_layout.addWidget(self.candidates_box)
+        kandidaat_acties = QHBoxLayout()
+        self.open_spotify_button = QPushButton("Open in Spotify")
+        self.open_spotify_button.setEnabled(False)
+        self.open_spotify_button.clicked.connect(self._open_spotify)
+        kandidaat_acties.addWidget(self.open_spotify_button)
         self.youtube_button = QPushButton("Search YouTube")
         self.youtube_button.setEnabled(False)
-        self.detail_layout.addWidget(self.youtube_button)
+        kandidaat_acties.addWidget(self.youtube_button)
+        kandidaat_acties.addStretch(1)
+        self.detail_layout.addLayout(kandidaat_acties)
         self.detail_layout.addStretch(1)
         detail_scroll.setWidget(self.detail_widget)
         splitter.addWidget(detail_scroll)
-        splitter.setSizes([820, 440])
+        splitter.setSizes([880, 480])
         layout.addWidget(splitter, stretch=1)
 
         self.summary_label = QLabel()
@@ -162,6 +214,8 @@ class RecoveryReviewDialog(QDialog):
         layout.addLayout(onder)
 
     def _vul_tabel(self):
+        self._building_table = True
+        self.table.setSortingEnabled(False)
         self.table.blockSignals(True)
         self.table.setRowCount(len(self.items))
         for row, item in enumerate(self.items):
@@ -178,6 +232,17 @@ class RecoveryReviewDialog(QDialog):
             )
             checkbox.setData(Qt.ItemDataRole.UserRole, item.id)
             self.table.setItem(row, 0, checkbox)
+            confidence = max(
+                (
+                    kandidaat.confidence
+                    for kandidaat in item.candidates
+                    if kandidaat.id == self._candidate_choice.get(item.id)
+                ),
+                default=max(
+                    (k.confidence for k in item.candidates),
+                    default=None,
+                ),
+            )
             waarden = (
                 item.year,
                 item.week,
@@ -187,20 +252,32 @@ class RecoveryReviewDialog(QDialog):
                 item.title,
                 item.recovery_status,
                 item.spotify_status,
+                confidence,
             )
             for column, waarde in enumerate(waarden, 1):
-                tabelitem = QTableWidgetItem(
-                    "—" if waarde in (None, "") else str(waarde)
+                tekst = (
+                    f"{waarde:.0%}" if column == 9 and waarde is not None
+                    else None
                 )
+                tabelitem = SorteerItem(waarde, tekst)
                 tabelitem.setFlags(
                     Qt.ItemFlag.ItemIsEnabled
                     | Qt.ItemFlag.ItemIsSelectable
                 )
                 self.table.setItem(row, column, tabelitem)
         self.table.blockSignals(False)
+        self.table.setSortingEnabled(True)
         self.table.resizeColumnsToContents()
+        self._building_table = False
         if self.items:
             self.table.selectRow(0)
+
+    def _item_for_row(self, row):
+        if row < 0 or self.table.item(row, 0) is None:
+            return None
+        return self._items_by_id.get(
+            self.table.item(row, 0).data(Qt.ItemDataRole.UserRole)
+        )
 
     def _selected_ids(self):
         return {
@@ -210,10 +287,33 @@ class RecoveryReviewDialog(QDialog):
             == Qt.CheckState.Checked
         }
 
+    def _candidate_for(self, item_id):
+        item = self._items_by_id[item_id]
+        kandidaat_id = self._candidate_choice.get(item_id)
+        return next(
+            (
+                kandidaat for kandidaat in item.candidates
+                if kandidaat.id == kandidaat_id
+            ),
+            None,
+        )
+
+    def _visible_rows(self):
+        return tuple(
+            row for row in range(self.table.rowCount())
+            if not self.table.isRowHidden(row)
+        )
+
     def _set_all(self, state):
         self.table.blockSignals(True)
-        for row in range(self.table.rowCount()):
-            self.table.item(row, 0).setCheckState(state)
+        for row in self._visible_rows():
+            tabelitem = self.table.item(row, 0)
+            tabelitem.setCheckState(state)
+            stel_playlist_selectie_in(
+                self.database,
+                tabelitem.data(Qt.ItemDataRole.UserRole),
+                state == Qt.CheckState.Checked,
+            )
         self.table.blockSignals(False)
         self._update_summary()
 
@@ -225,42 +325,106 @@ class RecoveryReviewDialog(QDialog):
 
     def _invert_selection(self):
         self.table.blockSignals(True)
-        for row in range(self.table.rowCount()):
-            item = self.table.item(row, 0)
-            item.setCheckState(
+        for row in self._visible_rows():
+            tabelitem = self.table.item(row, 0)
+            nieuw = (
                 Qt.CheckState.Unchecked
-                if item.checkState() == Qt.CheckState.Checked
+                if tabelitem.checkState() == Qt.CheckState.Checked
                 else Qt.CheckState.Checked
+            )
+            tabelitem.setCheckState(nieuw)
+            stel_playlist_selectie_in(
+                self.database,
+                tabelitem.data(Qt.ItemDataRole.UserRole),
+                nieuw == Qt.CheckState.Checked,
             )
         self.table.blockSignals(False)
         self._update_summary()
 
-    def _item_changed(self, _item):
+    def _item_changed(self, tabelitem):
+        if self._building_table or tabelitem.column() != 0:
+            return
+        stel_playlist_selectie_in(
+            self.database,
+            tabelitem.data(Qt.ItemDataRole.UserRole),
+            tabelitem.checkState() == Qt.CheckState.Checked,
+        )
         self._update_summary()
 
-    def _update_summary(self):
-        telling = {
-            "Match": 0,
-            "Multiple Matches": 0,
-            "Manual Review": 0,
-            "Low Confidence": 0,
-            "Not Found": 0,
-        }
-        for item in self.items:
-            telling[item.spotify_status] = (
-                telling.get(item.spotify_status, 0) + 1
-            )
-        geselecteerd = len(self._selected_ids())
-        self.summary_label.setText(
-            f"Recovery items: {len(self.items)} | "
-            f"Matched: {telling['Match']} | "
-            f"Multiple Matches: {telling['Multiple Matches']} | "
-            f"Manual Review: {telling['Manual Review']} | "
-            f"Low Confidence: {telling['Low Confidence']} | "
-            f"Not Found: {telling['Not Found']} | "
-            f"Selected for playlist: {geselecteerd}"
+    def _matches_filter(self, item, filter_name, search):
+        kandidaat = self._candidate_for(item.id)
+        klaar = bool(
+            item.id in self._selected_ids()
+            and kandidaat
+            and kandidaat.spotify_uri
         )
-        self.continue_button.setEnabled(geselecteerd > 0)
+        if filter_name == "Klaar voor playlist" and not klaar:
+            return False
+        if filter_name == "Nog te beoordelen" and (
+            kandidaat or item.spotify_status == "Not Found"
+        ):
+            return False
+        if filter_name == "Geen match" and item.candidates:
+            return False
+        if (
+            filter_name == "Low confidence"
+            and item.spotify_status != "Low Confidence"
+        ):
+            return False
+        if (
+            filter_name == "FFmpeg-fout"
+            and item.recovery_status != "FFmpeg failed"
+        ):
+            return False
+        if filter_name == "0-byte" and item.recovery_status != "Zero-byte":
+            return False
+        if filter_name == "Missing" and item.recovery_status != "Missing":
+            return False
+        if search:
+            haystack = " ".join(str(waarde or "") for waarde in (
+                item.original_filename, item.artist, item.title,
+                item.week, item.chart_position,
+            )).casefold()
+            if search.casefold() not in haystack:
+                return False
+        return True
+
+    def _apply_filter(self, *_args):
+        filter_name = self.filter_combo.currentText()
+        search = self.search_field.text().strip()
+        for row in range(self.table.rowCount()):
+            item = self._item_for_row(row)
+            self.table.setRowHidden(
+                row,
+                not self._matches_filter(item, filter_name, search),
+            )
+
+    def _update_summary(self):
+        selected = self._selected_ids()
+        met_match = sum(
+            self._candidate_for(item.id) is not None for item in self.items
+        )
+        klaar = sum(
+            item.id in selected
+            and (kandidaat := self._candidate_for(item.id)) is not None
+            and bool(kandidaat.spotify_uri)
+            for item in self.items
+        )
+        geen_match = sum(not item.candidates for item in self.items)
+        nog = sum(
+            bool(item.candidates) and self._candidate_for(item.id) is None
+            for item in self.items
+        )
+        self.summary_label.setText(
+            f"Totaal recovery-items: {len(self.items)} | "
+            f"Aangevinkt: {len(selected)} | "
+            f"Met gekozen Spotify-match: {met_match} | "
+            f"Klaar voor playlist: {klaar} | "
+            f"Nog te beoordelen: {nog} | "
+            f"Geen Spotify-match: {geen_match}"
+        )
+        self.continue_button.setEnabled(bool(selected))
+        self._apply_filter()
 
     def _clear_candidates(self):
         while self.candidates_layout.count():
@@ -272,25 +436,35 @@ class RecoveryReviewDialog(QDialog):
                 self._retired_candidate_widgets.append(widget)
 
     def _toon_selectie(self):
-        row = self.table.currentRow()
-        if row < 0 or row >= len(self.items):
+        item = self._item_for_row(self.table.currentRow())
+        if item is None:
             return
-        item = self.items[row]
-        self.detail_labels["week"].setText(
-            "—" if item.week is None else str(item.week)
-        )
-        self.detail_labels["position"].setText(
-            "—" if item.chart_position is None
-            else str(item.chart_position)
-        )
-        self.detail_labels["filename"].setText(item.original_filename)
-        self.detail_labels["recovery"].setText(item.recovery_status)
-        self.detail_labels["spotify"].setText(item.spotify_status)
-        self.detail_labels["matches"].setText(str(len(item.candidates)))
+        waarden = {
+            "year": item.year,
+            "week": item.week,
+            "position": item.chart_position,
+            "artist": item.artist,
+            "title": item.title,
+            "version": item.version,
+            "filename": item.original_filename,
+            "recovery": item.recovery_status,
+            "spotify": item.spotify_status,
+            "matches": len(item.candidates),
+        }
+        for key, waarde in waarden.items():
+            self.detail_labels[key].setText(
+                "—" if waarde in (None, "") else str(waarde)
+            )
         self._clear_candidates()
         groep = QButtonGroup(self)
         groep.setExclusive(True)
         self._candidate_groups[item.id] = groep
+        self.open_spotify_button.setEnabled(
+            bool(
+                (gekozen := self._candidate_for(item.id))
+                and gekozen.spotify_url
+            )
+        )
         if not item.candidates:
             self.candidates_layout.addWidget(QLabel(
                 "No Spotify match found."
@@ -320,12 +494,21 @@ class RecoveryReviewDialog(QDialog):
                 f"{(kandidaat.duration_ms // 1000) % 60:02d}"
                 if kandidaat.duration_ms else "—"
             )
+            waarschuwingen = (
+                "\nWaarschuwing: " + "; ".join(
+                    kandidaat.version_warnings
+                )
+                if kandidaat.version_warnings else ""
+            )
+            link = kandidaat.spotify_url or "—"
             tekst = QLabel(
                 f"{kandidaat.artist} — {kandidaat.title}\n"
-                f"Album: {kandidaat.album or '—'} | Duur: {duur} | "
-                f"Popularity: "
-                f"{kandidaat.popularity if kandidaat.popularity is not None else '—'}\n"
-                f"Confidence: {kandidaat.confidence:.0%}"
+                f"Album: {kandidaat.album or '—'} | "
+                f"Releasedatum: {kandidaat.release_date or '—'} | "
+                f"Duur: {duur}\nPopularity: "
+                f"{kandidaat.popularity if kandidaat.popularity is not None else '—'}"
+                f" | Confidence: {kandidaat.confidence:.0%}\n"
+                f"Spotify: {link}{waarschuwingen}"
             )
             tekst.setWordWrap(True)
             rij.addWidget(tekst, stretch=1)
@@ -350,8 +533,28 @@ class RecoveryReviewDialog(QDialog):
         reply.deleteLater()
 
     def _candidate_toggled(self, item_id, kandidaat_id, checked):
-        if checked:
-            self._candidate_choice[item_id] = kandidaat_id
+        if not checked:
+            return
+        try:
+            selecteer_spotify_kandidaat(
+                self.database, item_id, kandidaat_id, "USER_SELECTED"
+            )
+        except Exception as error:
+            QMessageBox.critical(
+                self, "Spotify-match", f"Keuze opslaan mislukt: {error}"
+            )
+            return
+        self._candidate_choice[item_id] = kandidaat_id
+        self.open_spotify_button.setEnabled(
+            bool(self._candidate_for(item_id).spotify_url)
+        )
+        self._update_summary()
+
+    def _open_spotify(self):
+        item = self._item_for_row(self.table.currentRow())
+        kandidaat = self._candidate_for(item.id) if item else None
+        if kandidaat and kandidaat.spotify_url:
+            QDesktopServices.openUrl(QUrl(kandidaat.spotify_url))
 
     def _gekozen_kandidaten(self):
         return {
@@ -360,12 +563,68 @@ class RecoveryReviewDialog(QDialog):
             if kandidaat_id is not None
         }
 
+    def _vraag_onvolledige_selectie(self, aantal):
+        dialoog = QMessageBox(self)
+        dialoog.setWindowTitle("Recovery Review")
+        dialoog.setText(
+            f"{aantal} geselecteerde nummers hebben nog geen "
+            "Spotify-match gekozen."
+        )
+        terug = dialoog.addButton(
+            "Terug naar review", QMessageBox.ButtonRole.RejectRole
+        )
+        deselecteer = dialoog.addButton(
+            "Niet-gematchte items deselecteren en doorgaan",
+            QMessageBox.ButtonRole.AcceptRole,
+        )
+        annuleren = dialoog.addButton(
+            "Annuleren", QMessageBox.ButtonRole.DestructiveRole
+        )
+        dialoog.exec()
+        if dialoog.clickedButton() is deselecteer:
+            return "deselect"
+        if dialoog.clickedButton() is annuleren:
+            return "cancel"
+        if dialoog.clickedButton() is terug:
+            return "back"
+        return "back"
+
     def _continue(self):
+        selected = self._selected_ids()
+        zonder_match = {
+            item_id for item_id in selected
+            if not (
+                (kandidaat := self._candidate_for(item_id))
+                and kandidaat.spotify_uri
+            )
+        }
+        if zonder_match:
+            keuze = self._vraag_onvolledige_selectie(len(zonder_match))
+            if keuze == "back":
+                return
+            if keuze == "cancel":
+                self.reject()
+                return
+            self.table.blockSignals(True)
+            for row in range(self.table.rowCount()):
+                tabelitem = self.table.item(row, 0)
+                if (
+                    tabelitem.data(Qt.ItemDataRole.UserRole)
+                    in zonder_match
+                ):
+                    tabelitem.setCheckState(Qt.CheckState.Unchecked)
+                    stel_playlist_selectie_in(
+                        self.database,
+                        tabelitem.data(Qt.ItemDataRole.UserRole),
+                        False,
+                    )
+            self.table.blockSignals(False)
+            selected -= zonder_match
         try:
             bewaar_recovery_review(
                 self.database,
                 self.recovery_set_id,
-                self._selected_ids(),
+                selected,
                 self._gekozen_kandidaten(),
             )
         except Exception as error:

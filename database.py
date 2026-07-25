@@ -234,6 +234,16 @@ class SQLiteDatabase:
             "spotify_last_checked": "TEXT",
             "playlist_selected": "INTEGER NOT NULL DEFAULT 0",
             "reviewed_at": "TEXT",
+            "selected_spotify_candidate_id": "INTEGER",
+            "selected_spotify_uri": "TEXT",
+            "selected_spotify_track_id": "TEXT",
+            "selected_spotify_artist": "TEXT",
+            "selected_spotify_title": "TEXT",
+            "selected_spotify_album": "TEXT",
+            "selected_spotify_duration_ms": "INTEGER",
+            "selected_spotify_confidence": "REAL",
+            "match_review_status": "TEXT",
+            "match_reviewed_at": "TEXT",
         }
 
         for kolom, kolomtype in recovery_migraties.items():
@@ -470,6 +480,7 @@ class SQLiteDatabase:
             "spotify_uri": "TEXT",
             "album_cover_url": "TEXT",
             "popularity": "INTEGER",
+            "release_date": "TEXT",
         }
         for kolom, kolomtype in spotify_candidate_migraties.items():
             if kolom not in spotify_candidate_kolommen:

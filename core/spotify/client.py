@@ -88,6 +88,7 @@ class SpotifyClient:
                     ),
                     None,
                 ),
+                release_date=item.get("album", {}).get("release_date"),
             )
             for item in data.get("tracks", {}).get("items", ())
             if item.get("id") and item.get("name")

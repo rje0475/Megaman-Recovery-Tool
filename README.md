@@ -164,6 +164,16 @@ Spotify-kandidaat. De selectie wordt in SQLite opgeslagen. In deze fase wordt
 nadrukkelijk nog geen Spotify-playlist gemaakt; `Playlist Sync` blijft
 uitgesteld tot een volgende workflowstap.
 
+Een overtuigende `MATCHED`-kandidaat wordt alleen vooraf geselecteerd wanneer
+de confidence minimaal 95% is, geen bijna gelijk scorende concurrent bestaat
+en titel/album geen zichtbaar versieconflict opleveren. Low-confidence- en
+reviewgevallen blijven leeg. De wizard toont versie-indicaties zoals Live,
+Remix, Radio Edit, Extended Mix, Acoustic en Remastered, ondersteunt zoeken,
+sorteren en filters, en bewaart checkbox- en kandidaatkeuzes direct. Alleen
+een aangevinkt item met een concrete Spotify-URI telt als **Klaar voor
+playlist**. Continue waarschuwt wanneer aangevinkte items nog geen bruikbare
+match hebben.
+
 Handmatige praktijktest:
 
 1. Haal de branch op met

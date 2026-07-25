@@ -27,6 +27,7 @@ class SpotifyTrack:
     duration_ms: int | None
     popularity: int | None
     album_cover_url: str | None = None
+    release_date: str | None = None
 
 
 @dataclass(frozen=True)
