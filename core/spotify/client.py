@@ -80,6 +80,14 @@ class SpotifyClient:
                 title=item.get("name", ""),
                 duration_ms=item.get("duration_ms"),
                 popularity=item.get("popularity"),
+                album_cover_url=next(
+                    (
+                        image.get("url")
+                        for image in item.get("album", {}).get("images", ())
+                        if image.get("url")
+                    ),
+                    None,
+                ),
             )
             for item in data.get("tracks", {}).get("items", ())
             if item.get("id") and item.get("name")

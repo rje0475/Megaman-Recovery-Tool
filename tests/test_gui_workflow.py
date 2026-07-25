@@ -28,6 +28,7 @@ class EventRecorder:
         self.skipped = []
         self.failed = []
         self.logs = []
+        self.reviews = []
 
     def callbacks(self):
         return WorkflowCallbacks(
@@ -37,6 +38,9 @@ class EventRecorder:
             stage_skipped=lambda *args: self.skipped.append(args),
             stage_failed=lambda *args: self.failed.append(args),
             log_message=self.logs.append,
+            review_requested=lambda summary: (
+                self.reviews.append(summary) or True
+            ),
         )
 
 
@@ -120,7 +124,7 @@ class GuiWorkflowAdapterTest(unittest.TestCase):
             nul_bytes=0,
         ),)
 
-    def test_stille_workflow_met_correcte_fases_en_playlist(self):
+    def test_stille_workflow_stopt_voor_playlist_en_vraagt_review(self):
         playlist_calls = []
 
         def search(*args, **kwargs):
@@ -162,11 +166,22 @@ class GuiWorkflowAdapterTest(unittest.TestCase):
             summary = workflow.run(self.root, events.callbacks())
         self.assertEqual(stdout.getvalue(), "")
         self.assertEqual(stderr.getvalue(), "")
-        self.assertEqual(playlist_calls, ["Megaman2007"])
+        self.assertEqual(playlist_calls, [])
         self.assertEqual(summary["matched"], 1)
-        self.assertEqual(summary["playlist_id"], "playlist-id")
-        self.assertEqual(events.started, list(WORKFLOW_STAGES))
-        self.assertEqual(events.completed, list(WORKFLOW_STAGES))
+        self.assertIsNone(summary["playlist_id"])
+        self.assertEqual(summary["recovery_set_id"], self.set_id)
+        self.assertTrue(summary["review_required"])
+        self.assertIn("Recovery Review", events.started)
+        self.assertNotIn("Playlist Sync", events.started)
+        self.assertEqual(events.reviews[0]["recovery_set_id"], self.set_id)
+        self.assertIn(
+            (
+                "Playlist Sync",
+                "Wacht op een afgeronde Recovery Review; "
+                "er is geen playlist aangemaakt.",
+            ),
+            events.skipped,
+        )
         self.assertEqual(events.failed, [])
         self.assertEqual(events.progress[-1].percent, 100)
 

@@ -152,9 +152,17 @@ python main.py --gui
 
 De hoofdactie **Start** voert één recovery-set buiten de GUI-thread uit. Het
 venster toont voor `Analyse`, `PAR2`, `RAR Recovery`, `Validatie`,
-`Recovery Items`, `Spotify Search`, `Playlist Sync` en `Rapport` steeds de
+`Recovery Items`, `Spotify Search`, `Recovery Review`, `Playlist Sync` en
+`Rapport` steeds de
 toestand wachtend, actief, voltooid, overgeslagen of mislukt. De algemene
 voortgang, huidige stap en gelogde backendmeldingen worden realtime bijgewerkt.
+
+Na Spotify Search opent de **Recovery Review Wizard**. Deze toont uitsluitend
+ontbrekende of defecte recovery-items en alle opgeslagen Spotify-kandidaten.
+Selecteer de items die later naar een playlist mogen en kies waar nodig één
+Spotify-kandidaat. De selectie wordt in SQLite opgeslagen. In deze fase wordt
+nadrukkelijk nog geen Spotify-playlist gemaakt; `Playlist Sync` blijft
+uitgesteld tot een volgende workflowstap.
 
 Handmatige praktijktest:
 
@@ -174,15 +182,17 @@ Handmatige praktijktest:
    wordt en geen fase permanent actief blijft.
 8. Verplaats of vergroot het venster tijdens validatie en Spotify Search om
    te controleren dat de interface responsief blijft.
-9. Controleer na afloop het eindoverzicht, de opnieuw actieve Start-knop en
-   **Spotify-playlist openen**. Deze opent
-   `https://open.spotify.com/playlist/<playlist-id>`.
-10. Test een lege of niet-bestaande bron; er verschijnt een waarschuwing en
+9. Beoordeel in Recovery Review de kandidaten, test **Select All**,
+   **Select None** en **Invert Selection**, en controleer dat **Continue**
+   pas actief wordt zodra minimaal één item is geselecteerd.
+10. Rond de review af. Playlist Sync wordt zichtbaar overgeslagen en er wordt
+    in deze fase geen Spotify-playlist aangemaakt.
+11. Test een lege of niet-bestaande bron; er verschijnt een waarschuwing en
     er start geen worker.
-11. Test zonder Spotify-credentials/netwerk; Spotify Search en/of Playlist
-    Sync worden gemotiveerd overgeslagen, terwijl rapportage beschikbaar
-    blijft.
-12. Probeer tijdens een actieve workflow het venster te sluiten. De GUI
+12. Test zonder Spotify-credentials/netwerk; Spotify Search, Recovery Review
+    en Playlist Sync worden gemotiveerd overgeslagen, terwijl rapportage
+    beschikbaar blijft.
+13. Probeer tijdens een actieve workflow het venster te sluiten. De GUI
     blokkeert sluiten met de melding dat de workflow nog loopt. Sluit opnieuw
     nadat de workflow klaar is; er hoort geen `QThread destroyed`-waarschuwing
     te verschijnen.

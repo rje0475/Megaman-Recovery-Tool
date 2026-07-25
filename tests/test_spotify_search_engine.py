@@ -314,6 +314,7 @@ class SpotifySearchEngineDatabaseTest(unittest.TestCase):
         client = FakeSpotifyClient({
             'artist:"Artist" track:"Song"': (
                 track("id-1", "Artist", "Song", popularity=88),
+                track("id-2", "Artist", "Song Live", popularity=40),
             )
         })
         log = io.StringIO()
@@ -332,6 +333,18 @@ class SpotifySearchEngineDatabaseTest(unittest.TestCase):
         self.assertGreater(rij["spotify_confidence"], .85)
         self.assertIn("Confidence:", log.getvalue())
         self.assertEqual(summary.recovery_set_id, self.set_id)
+        kandidaten = self.db.verbinding.execute(
+            """
+            SELECT * FROM spotify_candidates
+            WHERE recovery_item_id=? ORDER BY rank_number
+            """,
+            (item_id,),
+        ).fetchall()
+        self.assertEqual(
+            [kandidaat["spotify_track_id"] for kandidaat in kandidaten],
+            ["id-1", "id-2"],
+        )
+        self.assertEqual(kandidaten[0]["popularity"], 88)
 
     def test_not_found_low_confidence_en_manual_review_worden_bewaard(self):
         not_found = self._item("Nobody", "Missing", "set/missing.mp3")

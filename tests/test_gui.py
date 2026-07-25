@@ -14,6 +14,7 @@ from PySide6.QtGui import QCloseEvent, QDesktopServices
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import (
     QApplication,
+    QDialog,
     QFileDialog,
     QMessageBox,
     QPushButton,
@@ -86,7 +87,7 @@ class SuccesWorkflow:
         callbacks.stage_completed("Analyse")
         for stage in (
             "PAR2", "RAR Recovery", "Validatie", "Recovery Items",
-            "Spotify Search", "Playlist Sync", "Rapport",
+            "Spotify Search", "Recovery Review", "Playlist Sync", "Rapport",
         ):
             callbacks.stage_started(stage)
             callbacks.stage_progress(maak_progress(
@@ -102,6 +103,33 @@ class FoutWorkflow:
     def run(self, source, callbacks):
         callbacks.stage_started("Analyse")
         raise RuntimeError("technische fout")
+
+
+class ReviewWorkflow:
+    def run(self, source, callbacks):
+        callbacks.stage_started("Spotify Search")
+        callbacks.stage_completed("Spotify Search")
+        callbacks.stage_started("Recovery Review")
+        accepted = callbacks.review_requested({
+            "recovery_set_id": 42,
+            "recovery_set": "Megaman2007",
+        })
+        if accepted:
+            callbacks.stage_completed("Recovery Review")
+        else:
+            callbacks.stage_skipped(
+                "Recovery Review", "Review gesloten."
+            )
+        callbacks.stage_skipped("Playlist Sync", "Uitgesteld.")
+        callbacks.stage_started("Rapport")
+        callbacks.stage_completed("Rapport")
+        summary = succesvolle_summary()
+        summary.update({
+            "playlist_id": None,
+            "playlist_name": "",
+            "playlist_added": 0,
+        })
+        return summary
 
 
 class CliGuiTest(unittest.TestCase):
@@ -195,7 +223,7 @@ class MainWindowTest(unittest.TestCase):
         self.assertEqual(tuple(self.venster.stage_labels), (
             "Analyse", "PAR2", "RAR Recovery", "Validatie",
             "Recovery Items", "Spotify Search",
-            "Playlist Sync", "Rapport",
+            "Recovery Review", "Playlist Sync", "Rapport",
         ))
         self.assertFalse(hasattr(self.venster, "spotify_tabel"))
         self.assertFalse(hasattr(self.venster, "analyseren_knop"))
@@ -336,6 +364,74 @@ class MainWindowTest(unittest.TestCase):
             openen.call_args.args[0].toString(),
             "https://open.spotify.com/playlist/abc",
         )
+
+    def test_review_wizard_wordt_na_spotify_geopend_zonder_playlist(self):
+        dialog = QDialog(self.venster)
+        aangeroepen = []
+        resolved = []
+
+        def factory(set_id, setnaam, parent):
+            aangeroepen.append((set_id, setnaam, parent))
+            return dialog
+
+        self.venster.review_factory = factory
+        self.venster.workflow_worker = type(
+            "ReviewResolver",
+            (),
+            {"resolve_review": lambda _self, accepted: resolved.append(accepted)},
+        )()
+        summary = succesvolle_summary()
+        summary.update({
+            "recovery_set_id": 42,
+            "review_required": True,
+            "playlist_id": None,
+            "playlist_name": "",
+            "playlist_added": 0,
+        })
+        self.venster._open_recovery_review(summary)
+        self.assertEqual(
+            aangeroepen, [(42, "Megaman2007", self.venster)]
+        )
+        self.assertTrue(self.venster.review_active)
+        self.assertEqual(
+            self.venster.stage_labels["Recovery Review"].property(
+                "workflowState"
+            ),
+            "actief",
+        )
+        self.assertFalse(self.venster.playlist_knop.isEnabled())
+        dialog.accept()
+        QApplication.processEvents()
+        self.assertFalse(self.venster.review_active)
+        self.assertEqual(resolved, [True])
+
+    def test_worker_wacht_op_review_en_hervat_na_continue(self):
+        dialog = QDialog(self.venster)
+        self.venster.workflow_factory = ReviewWorkflow
+        self.venster.review_factory = (
+            lambda set_id, setnaam, parent: dialog
+        )
+        self.venster._start_workflow()
+        self.assertTrue(wacht_tot(lambda: self.venster.review_active))
+        self.assertTrue(self.venster.workflow_running)
+        self.assertFalse(self.venster.start_knop.isEnabled())
+        dialog.accept()
+        self.assertTrue(wacht_tot(
+            lambda: not self.venster._thread_actief(), 5000
+        ))
+        self.assertEqual(
+            self.venster.stage_labels["Recovery Review"].property(
+                "workflowState"
+            ),
+            "voltooid",
+        )
+        self.assertEqual(
+            self.venster.stage_labels["Playlist Sync"].property(
+                "workflowState"
+            ),
+            "overgeslagen",
+        )
+        self.assertFalse(self.venster.playlist_knop.isEnabled())
 
 
 if __name__ == "__main__":

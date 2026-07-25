@@ -232,6 +232,8 @@ class SQLiteDatabase:
             "spotify_search_method": "TEXT",
             "spotify_status": "TEXT",
             "spotify_last_checked": "TEXT",
+            "playlist_selected": "INTEGER NOT NULL DEFAULT 0",
+            "reviewed_at": "TEXT",
         }
 
         for kolom, kolomtype in recovery_migraties.items():
@@ -458,6 +460,23 @@ class SQLiteDatabase:
             )
             """
         )
+        spotify_candidate_kolommen = {
+            rij["name"]
+            for rij in self.verbinding.execute(
+                "PRAGMA table_info(spotify_candidates)"
+            )
+        }
+        spotify_candidate_migraties = {
+            "spotify_uri": "TEXT",
+            "album_cover_url": "TEXT",
+            "popularity": "INTEGER",
+        }
+        for kolom, kolomtype in spotify_candidate_migraties.items():
+            if kolom not in spotify_candidate_kolommen:
+                self.verbinding.execute(
+                    f"ALTER TABLE spotify_candidates "
+                    f"ADD COLUMN {kolom} {kolomtype}"
+                )
         rar_item_kolommen = {
             rij["name"] for rij in self.verbinding.execute(
                 "PRAGMA table_info(rar_inventory_items)"

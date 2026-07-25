@@ -62,7 +62,9 @@ def zoekopdrachten(artiest, titel):
     )
 
 
-def zoek_beste_match(client, artiest, titel, duur_ms=None):
+def zoek_beste_match(
+    client, artiest, titel, duur_ms=None, kandidaten_callback=None
+):
     parsed = parseer_recovery_itemnaam(
         f"{artiest} - {titel}", artiest, titel
     )
@@ -92,10 +94,17 @@ def zoek_beste_match(client, artiest, titel, duur_ms=None):
                     score.total, methode, track
                 )
     if not kandidaten:
+        if kandidaten_callback:
+            kandidaten_callback(())
         return SpotifyMatch(None, None, None, NOT_FOUND)
-    score, methode, track = max(
-        kandidaten.values(), key=lambda kandidaat: kandidaat[0]
-    )
+    gerangschikt = tuple(sorted(
+        kandidaten.values(),
+        key=lambda kandidaat: kandidaat[0],
+        reverse=True,
+    ))
+    if kandidaten_callback:
+        kandidaten_callback(gerangschikt)
+    score, methode, track = gerangschikt[0]
     if score >= MATCH_THRESHOLD:
         status = MATCHED
     elif score >= LOW_CONFIDENCE_THRESHOLD:
@@ -105,6 +114,37 @@ def zoek_beste_match(client, artiest, titel, duur_ms=None):
     else:
         return SpotifyMatch(None, score, methode, NOT_FOUND)
     return SpotifyMatch(track, score, methode, status)
+
+
+def _bewaar_kandidaten(
+    database, item_id, kandidaten, artiest, titel, duur_ms
+):
+    database.verbinding.execute(
+        "DELETE FROM spotify_candidates WHERE recovery_item_id=?",
+        (item_id,),
+    )
+    for rang, (score, methode, track) in enumerate(kandidaten, 1):
+        details = bereken_score(artiest, titel, duur_ms, track)
+        database.verbinding.execute(
+            """
+            INSERT INTO spotify_candidates (
+              recovery_item_id, spotify_track_id, spotify_uri, spotify_url,
+              artist, title, album, album_cover_url, duration_ms, popularity,
+              total_score, artist_score, title_score, version_score,
+              duration_score, rank_number, search_strategy, search_query,
+              selected, rejected, score_reason
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?,
+                      '', 0, 0, '')
+            """,
+            (
+                item_id, track.track_id, track.uri, track.url,
+                ", ".join(track.artists), track.title, track.album,
+                track.album_cover_url, track.duration_ms, track.popularity,
+                score, details.primary_artist, details.title,
+                details.duration, rang, methode,
+            ),
+        )
+    database.verbinding.commit()
 
 
 def _bewaar_match(database, item_id, match):
@@ -320,6 +360,9 @@ def voer_spotify_search_uit(
             item["bepaalde_titel"],
         )
         artiest, titel = parsed.artist, parsed.title
+        _bewaar_kandidaten(
+            database, item["id"], (), artiest, titel, None
+        )
         if verbose_items:
             uitvoer.write(
                 f"\nSpotify zoeken:\n{artiest} - {titel}\n"
@@ -328,9 +371,16 @@ def voer_spotify_search_uit(
             match = SpotifyMatch(None, None, None, MANUAL_REVIEW)
         else:
             try:
+                kandidaten = []
+                duur_ms = _lokale_duur_ms(item["local_file"])
                 match = zoek_beste_match(
                     client, artiest, titel,
-                    _lokale_duur_ms(item["local_file"]),
+                    duur_ms,
+                    kandidaten_callback=kandidaten.extend,
+                )
+                _bewaar_kandidaten(
+                    database, item["id"], kandidaten,
+                    artiest, titel, duur_ms,
                 )
             except SpotifyApiError as error:
                 if verbose_items:

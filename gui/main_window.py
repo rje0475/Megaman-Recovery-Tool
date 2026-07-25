@@ -8,6 +8,7 @@ from PySide6.QtCore import QElapsedTimer, QThread, QUrl, Qt
 from PySide6.QtGui import QCloseEvent, QDesktopServices, QTextCursor
 from PySide6.QtWidgets import (
     QFileDialog,
+    QDialog,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -26,6 +27,7 @@ from gui.workflow import (
     WORKFLOW_STAGES,
     bepaal_recovery_setnaam,
 )
+from gui.recovery_review import RecoveryReviewDialog
 from gui.workers import WorkflowWorker
 
 
@@ -58,12 +60,14 @@ class MegamanMainWindow(QMainWindow):
         worker_factory=WorkflowWorker,
         thread_factory=QThread,
         set_name_resolver=bepaal_recovery_setnaam,
+        review_factory=RecoveryReviewDialog,
     ):
         super().__init__()
         self.workflow_factory = workflow_factory
         self.worker_factory = worker_factory
         self.thread_factory = thread_factory
         self.set_name_resolver = set_name_resolver
+        self.review_factory = review_factory
         self.workflow_thread = None
         self.workflow_worker = None
         self.workflow_running = False
@@ -71,6 +75,9 @@ class MegamanMainWindow(QMainWindow):
         self._worker_done = False
         self._thread_done = False
         self.playlist_id = None
+        self.review_dialog = None
+        self.review_active = False
+        self._last_summary = None
         self._last_log = None
         self._progress_timer = QElapsedTimer()
         self._last_progress_percent = -1
@@ -215,7 +222,7 @@ class MegamanMainWindow(QMainWindow):
         return bron.resolve()
 
     def _thread_actief(self):
-        return self.workflow_running
+        return self.workflow_running or self.review_active
 
     def _start_workflow(self):
         if self._thread_actief():
@@ -256,6 +263,7 @@ class MegamanMainWindow(QMainWindow):
         worker.log_message.connect(self._append_log)
         worker.workflow_completed.connect(self._workflow_completed)
         worker.workflow_failed.connect(self._workflow_failed)
+        worker.review_requested.connect(self._open_recovery_review)
         worker.finished.connect(self._worker_finished)
         worker.finished.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
@@ -265,6 +273,7 @@ class MegamanMainWindow(QMainWindow):
 
     def _reset_workflow(self):
         self.playlist_id = None
+        self._last_summary = None
         self.playlist_knop.setEnabled(False)
         self.voortgang.setValue(0)
         self.huidige_stap_label.setText("Geen")
@@ -389,6 +398,7 @@ class MegamanMainWindow(QMainWindow):
         self.statusregel.setText(
             f"Workflow {summary.get('status', 'voltooid')}."
         )
+        self._last_summary = summary
         setnaam = summary.get("recovery_set") or "Onbekend"
         self.recovery_set_label.setText(setnaam)
         self.playlist_id = summary.get("playlist_id")
@@ -412,6 +422,63 @@ class MegamanMainWindow(QMainWindow):
             f"Playlist: {summary.get('playlist_name') or 'niet beschikbaar'}"
             f"\nRapport: {summary.get('report_path') or 'niet beschikbaar'}"
         )
+    def _open_recovery_review(self, summary):
+        self.review_active = True
+        self.start_knop.setEnabled(False)
+        self.bladeren_knop.setEnabled(False)
+        self._set_stage_state("Recovery Review", "actief")
+        self.huidige_stap_label.setText("Recovery Review")
+        self.huidige_activiteit_label.setText(
+            "Recovery-items handmatig beoordelen"
+        )
+        self.statusregel.setText("Recovery Review wordt uitgevoerd…")
+        self._append_log(
+            "Recovery Review geopend; er is nog geen playlist aangemaakt."
+        )
+        try:
+            dialog = self.review_factory(
+                summary["recovery_set_id"],
+                summary["recovery_set"],
+                self,
+            )
+        except Exception as error:
+            self.review_active = False
+            self._set_stage_state(
+                "Recovery Review", "mislukt", str(error)
+            )
+            self._append_log(f"Recovery Review kon niet openen: {error}")
+            QMessageBox.critical(
+                self, "Recovery Review", str(error)
+            )
+            return
+        self.review_dialog = dialog
+        dialog.finished.connect(self._review_finished)
+        dialog.show()
+
+    def _review_finished(self, result):
+        self.review_active = False
+        accepted = result == QDialog.DialogCode.Accepted
+        if result == QDialog.DialogCode.Accepted:
+            self.statusregel.setText(
+                "Recovery Review opgeslagen; workflow wordt hervat."
+            )
+            self._append_log(
+                "Recovery Review opgeslagen. Er is geen playlist aangemaakt."
+            )
+        else:
+            self.statusregel.setText(
+                "Recovery Review gesloten; workflow wordt hervat."
+            )
+            self._append_log(
+                "Recovery Review gesloten; er is geen playlist aangemaakt."
+            )
+        self.huidige_stap_label.setText("Recovery Review")
+        self.huidige_activiteit_label.setText(
+            "Backendworkflow hervatten"
+        )
+        self.review_dialog = None
+        if self.workflow_worker is not None:
+            self.workflow_worker.resolve_review(accepted)
 
     def _workflow_failed(self, error):
         for stage, label in self.stage_labels.items():
@@ -445,8 +512,8 @@ class MegamanMainWindow(QMainWindow):
         if not (self._worker_done and self._thread_done):
             return
         self.workflow_running = False
-        self.start_knop.setEnabled(True)
-        self.bladeren_knop.setEnabled(True)
+        self.start_knop.setEnabled(not self.review_active)
+        self.bladeren_knop.setEnabled(not self.review_active)
         if self.statusregel.text() == "Workflow wordt uitgevoerd…":
             self.statusregel.setText("Workflow beëindigd.")
 

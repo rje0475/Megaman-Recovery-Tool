@@ -11,8 +11,7 @@ from core.salvage_workflow import (
     ontdek_archive_sets,
     voer_salvage_workflow_uit,
 )
-from core.spotify import sync_playlist, voer_spotify_search_uit
-from core.spotify.auth import SpotifyUserAuthorizationError
+from core.spotify import voer_spotify_search_uit
 from core.spotify.client import SpotifyConfigurationError
 from core.spotify.search import definitieve_spotify_telling
 from database import (
@@ -30,6 +29,7 @@ WORKFLOW_STAGES = (
     "Validatie",
     "Recovery Items",
     "Spotify Search",
+    "Recovery Review",
     "Playlist Sync",
     "Rapport",
 )
@@ -84,6 +84,7 @@ class WorkflowCallbacks:
     stage_skipped: Callable[[str, str], None]
     stage_failed: Callable[[str, str], None]
     log_message: Callable[[str], None]
+    review_requested: Callable[[dict], bool] = lambda _summary: False
 
 
 def _par2_setnaam(bestand):
@@ -195,7 +196,7 @@ class RecoveryGuiWorkflow:
         analyse=voer_analyse,
         salvage=voer_salvage_workflow_uit,
         spotify_search=voer_spotify_search_uit,
-        playlist_sync=sync_playlist,
+        playlist_sync=None,
         report=maak_rapport,
         database_factory=SQLiteDatabase,
         database_path=DATABASE_BESTAND,
@@ -215,6 +216,8 @@ class RecoveryGuiWorkflow:
         callbacks.log_message(f"Recovery-set bepaald: {setnaam}")
         summary = {
             "recovery_set": setnaam,
+            "recovery_set_id": None,
+            "review_required": False,
             "total_mp3": 0,
             "ok": 0,
             "ffmpeg_errors": 0,
@@ -310,6 +313,8 @@ class RecoveryGuiWorkflow:
                 )
                 search = None
             else:
+                summary["recovery_set_id"] = search.recovery_set_id
+                summary["review_required"] = search.total > 0
                 telling = definitieve_spotify_telling(
                     database, search.recovery_set_id
                 )
@@ -341,49 +346,41 @@ class RecoveryGuiWorkflow:
                 )
             writer.flush()
 
-            callbacks.stage_started("Playlist Sync")
-            if search is None or summary["matched"] <= 0:
-                reden = (
-                    "Spotify Search was niet beschikbaar."
-                    if search is None else
-                    "Er zijn geen MATCHED-tracks."
-                )
-                callbacks.stage_skipped("Playlist Sync", reden)
-                callbacks.log_message(
-                    f"Playlist Sync overgeslagen: {reden}"
+            if search is None:
+                callbacks.stage_skipped(
+                    "Recovery Review",
+                    "Spotify Search was niet beschikbaar.",
                 )
             else:
-                try:
-                    playlist = self.playlist_sync(
-                        database,
-                        archive_set_name=setnaam,
-                        uitvoer=writer,
-                    )
-                except (
-                    SpotifyConfigurationError,
-                    SpotifyUserAuthorizationError,
-                ) as error:
-                    callbacks.stage_skipped("Playlist Sync", str(error))
+                callbacks.stage_started("Recovery Review")
+                callbacks.log_message(
+                    "Recovery Review geopend; "
+                    "er wordt nog geen playlist gemaakt."
+                )
+                review_opgeslagen = callbacks.review_requested({
+                    **summary,
+                    "recovery_set_id": search.recovery_set_id,
+                    "recovery_set": setnaam,
+                })
+                if review_opgeslagen:
+                    callbacks.stage_completed("Recovery Review")
                     callbacks.log_message(
-                        f"Playlist Sync overgeslagen: {error}"
+                        "Recovery Review opgeslagen."
                     )
                 else:
-                    summary.update({
-                        "playlist_added": playlist.added,
-                        "playlist_existing": playlist.already_present,
-                        "playlist_id": playlist.playlist_id,
-                        "playlist_name": playlist.playlist_name,
-                    })
-                    callbacks.stage_progress(maak_progress(
-                        "Playlist Sync", 1, 1,
-                        "Spotify-playlist bijgewerkt.",
-                    ))
-                    callbacks.stage_completed("Playlist Sync")
-                    callbacks.log_message(
-                        f"Playlist bijgewerkt: {playlist.playlist_name}."
+                    callbacks.stage_skipped(
+                        "Recovery Review",
+                        "Review gesloten zonder voortzetten.",
                     )
+            callbacks.stage_skipped(
+                "Playlist Sync",
+                "Wacht op een afgeronde Recovery Review; "
+                "er is geen playlist aangemaakt.",
+            )
+            callbacks.log_message(
+                "Playlist Sync uitgesteld tot na Recovery Review."
+            )
             writer.flush()
-
             callbacks.stage_started("Rapport")
             rapportpad = self.report(source, database)
             summary["report_path"] = str(rapportpad)
