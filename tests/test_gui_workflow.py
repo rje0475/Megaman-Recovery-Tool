@@ -1,14 +1,22 @@
+import contextlib
+import io
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
+from core.progress import maak_progress
 from core.spotify.client import SpotifyConfigurationError
-from database import maak_database, verkrijg_of_maak_recovery_set
+from database import (
+    maak_database,
+    verkrijg_of_maak_recovery_set,
+)
 from gui.workflow import (
     RecoveryGuiWorkflow,
     WorkflowCallbacks,
     WORKFLOW_STAGES,
+    bepaal_recovery_setnaam,
 )
 
 
@@ -24,7 +32,7 @@ class EventRecorder:
     def callbacks(self):
         return WorkflowCallbacks(
             stage_started=self.started.append,
-            stage_progress=lambda *args: self.progress.append(args),
+            stage_progress=self.progress.append,
             stage_completed=self.completed.append,
             stage_skipped=lambda *args: self.skipped.append(args),
             stage_failed=lambda *args: self.failed.append(args),
@@ -34,8 +42,12 @@ class EventRecorder:
 
 class GuiWorkflowAdapterTest(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
+        self.temp = tempfile.TemporaryDirectory(
+            prefix="4fe20a254f204822ed17e7c3 (1).#3."
+        )
         self.root = Path(self.temp.name)
+        (self.root / "Megaman2007.part01.rar").touch()
+        (self.root / "Megaman2007.part02.rar").touch()
         self.database_path = self.root / "workflow.db"
         database = maak_database(self.database_path)
         self.set_id = verkrijg_of_maak_recovery_set(
@@ -54,7 +66,7 @@ class GuiWorkflowAdapterTest(unittest.TestCase):
               spotify_track_id, spotify_uri, spotify_status,
               aangemaakt_op, bijgewerkt_op
             ) VALUES (
-              'set', ?, 'track.mp3', 'track.mp3',
+              'megaman2007', ?, 'track.mp3', 'track.mp3',
               'corrupt', 'salvage', 0, 0, 0, 0,
               'Artist', 'Track', 'track-id',
               'spotify:track:track-id', 'MATCHED', ?, ?
@@ -68,22 +80,67 @@ class GuiWorkflowAdapterTest(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def _salvage_result(self):
+    def _analyse(self, *args, **kwargs):
+        self.assertFalse(kwargs["console_progress"])
+        self.assertFalse(kwargs["include_legacy_spotify"])
+        kwargs["progress_callback"](maak_progress(
+            "Validatie", 1, 1, "Analysebestand gecontroleerd.",
+            ok_count=1, ffmpeg_error_count=0, zero_byte_count=0,
+        ))
+        kwargs["uitvoer"].write("Analysebackend voltooid\n")
         return SimpleNamespace(
-            rar_setnaam="Megaman2007",
-            spotify_recovery_items=1,
-            eindstatus="SALVAGED",
+            totaal_mp3=1,
+            goed=1,
+            ffmpeg_fouten=0,
+            nul_bytes=0,
+            rapport_pad=self.root / "analyse.txt",
         )
 
-    def test_bestaande_matches_leiden_tot_playlist_sync(self):
+    def _salvage(self, *args, **kwargs):
+        progress = kwargs["progress_callback"]
+        progress(maak_progress("PAR2", 1, 1, "PAR2 gecontroleerd."))
+        progress(maak_progress(
+            "RAR Recovery", 1, 1, "RAR-recovery voltooid."
+        ))
+        progress(maak_progress(
+            "Validatie", 1, 1, "Salvagevalidatie voltooid.",
+            ok_count=1, ffmpeg_error_count=0, zero_byte_count=0,
+        ))
+        progress(maak_progress(
+            "Recovery Items", 1, 1, "Eén recovery-item.",
+        ))
+        kwargs["uitvoer"].write("Salvagebackend voltooid\n")
+        return (SimpleNamespace(
+            rar_setnaam="megaman2007",
+            spotify_recovery_items=1,
+            eindstatus="SALVAGED",
+            fysiek_aanwezig=1,
+            goed=1,
+            ffmpeg_fouten=0,
+            nul_bytes=0,
+        ),)
+
+    def test_stille_workflow_met_correcte_fases_en_playlist(self):
         playlist_calls = []
+
+        def search(*args, **kwargs):
+            kwargs["progress_callback"](maak_progress(
+                "Spotify Search", 1, 1, "Track verwerkt.",
+                matched_count=1,
+                low_confidence_count=0,
+                manual_review_count=0,
+                not_found_count=0,
+                error_count=0,
+            ))
+            return SimpleNamespace(
+                recovery_set_id=self.set_id,
+                total=1,
+            )
+
         workflow = RecoveryGuiWorkflow(
-            analyse=lambda *args, **kwargs: None,
-            salvage=lambda *args, **kwargs: (self._salvage_result(),),
-            spotify_search=lambda *args, **kwargs: SimpleNamespace(
-                matched=0, low_confidence=0,
-                manual_review=0, not_found=0,
-            ),
+            analyse=self._analyse,
+            salvage=self._salvage,
+            spotify_search=search,
             playlist_sync=lambda *args, **kwargs: (
                 playlist_calls.append(kwargs["archive_set_name"])
                 or SimpleNamespace(
@@ -92,23 +149,31 @@ class GuiWorkflowAdapterTest(unittest.TestCase):
                     playlist_name="Megaman2007",
                 )
             ),
-            report=lambda *args, **kwargs: self.root / "rapport.txt",
+            report=lambda *args: self.root / "rapport.txt",
             database_factory=maak_database,
             database_path=self.database_path,
         )
         events = EventRecorder()
-        summary = workflow.run(self.root, events.callbacks())
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with (
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            summary = workflow.run(self.root, events.callbacks())
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertEqual(stderr.getvalue(), "")
         self.assertEqual(playlist_calls, ["Megaman2007"])
         self.assertEqual(summary["matched"], 1)
         self.assertEqual(summary["playlist_id"], "playlist-id")
         self.assertEqual(events.started, list(WORKFLOW_STAGES))
         self.assertEqual(events.completed, list(WORKFLOW_STAGES))
         self.assertEqual(events.failed, [])
+        self.assertEqual(events.progress[-1].percent, 100)
 
-    def test_spotify_zonder_configuratie_wordt_netjes_overgeslagen(self):
+    def test_spotify_zonder_configuratie_wordt_overgeslagen(self):
         workflow = RecoveryGuiWorkflow(
-            analyse=lambda *args, **kwargs: None,
-            salvage=lambda *args, **kwargs: (self._salvage_result(),),
+            analyse=self._analyse,
+            salvage=self._salvage,
             spotify_search=lambda *args, **kwargs: (
                 (_ for _ in ()).throw(
                     SpotifyConfigurationError("credentials ontbreken")
@@ -117,7 +182,7 @@ class GuiWorkflowAdapterTest(unittest.TestCase):
             playlist_sync=lambda *args, **kwargs: self.fail(
                 "playlist mag niet starten"
             ),
-            report=lambda *args, **kwargs: self.root / "rapport.txt",
+            report=lambda *args: self.root / "rapport.txt",
             database_factory=maak_database,
             database_path=self.database_path,
         )
@@ -131,6 +196,95 @@ class GuiWorkflowAdapterTest(unittest.TestCase):
             stage == "Playlist Sync" for stage, _ in events.skipped
         ))
         self.assertIsNone(summary["playlist_id"])
+
+
+class RecoverySetNaamTest(unittest.TestCase):
+    def test_multipart_rar_wint_van_nzbget_mapnaam(self):
+        with tempfile.TemporaryDirectory(
+            prefix="4fe20a254f204822ed17e7c3.#3."
+        ) as root:
+            root = Path(root)
+            (root / "Megaman2007.part01.rar").touch()
+            (root / "Megaman2007.part02.rar").touch()
+            self.assertEqual(
+                bepaal_recovery_setnaam(root, root / "geen.db"),
+                "Megaman2007",
+            )
+
+    def test_oude_rar_en_par2_worden_afgeleid(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            (root / "Jaarcollectie.rar").touch()
+            (root / "Jaarcollectie.r00").touch()
+            self.assertEqual(
+                bepaal_recovery_setnaam(root, root / "geen.db"),
+                "Jaarcollectie",
+            )
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            (root / "Megaman2007.vol000+01.par2").touch()
+            self.assertEqual(
+                bepaal_recovery_setnaam(root, root / "geen.db"),
+                "Megaman2007",
+            )
+
+    def test_bestaande_databasenaam_en_mapfallback(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            (root / "megaman2007.part01.rar").touch()
+            database_path = root / "db.sqlite"
+            database = maak_database(database_path)
+            verkrijg_of_maak_recovery_set(
+                database,
+                "megaman2007.part01.rar",
+                archive_set_name="Megaman2007",
+            )
+            database.sluit()
+            self.assertEqual(
+                bepaal_recovery_setnaam(root, database_path),
+                "Megaman2007",
+            )
+        with tempfile.TemporaryDirectory(prefix="GewoneMap.") as root:
+            root = Path(root)
+            self.assertEqual(
+                bepaal_recovery_setnaam(root, root / "geen.db"),
+                root.name,
+            )
+
+
+class StilleScannerProgressTest(unittest.TestCase):
+    def test_gui_scanner_is_stil_en_levert_structuur(self):
+        from scanner import controleer_mp3_bestanden
+
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            bestand = root / "Artist – Één's Track.mp3"
+            bestand.write_bytes(b"data")
+            database = maak_database(root / "scan.db")
+            progress = []
+            stdout = io.StringIO()
+            try:
+                with (
+                    patch(
+                        "scanner.controleer_bestand",
+                        return_value=(
+                            bestand.name, "OK", None, None
+                        ),
+                    ),
+                    contextlib.redirect_stdout(stdout),
+                ):
+                    controleer_mp3_bestanden(
+                        (bestand,),
+                        root,
+                        database,
+                        progress_callback=progress.append,
+                        console_progress=False,
+                    )
+            finally:
+                database.sluit()
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertEqual(progress[-1].percent, 100)
+        self.assertEqual(progress[-1].ok_count, 1)
 
 
 if __name__ == "__main__":

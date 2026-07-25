@@ -151,7 +151,6 @@ def main(argv=None, invoer=input, uitvoer=None):
         maak_parser().error(
             "salvage-opties horen bij --salvage-rar"
         )
-    uitvoer.write(BANNER + "\n")
     try:
         if args.gui:
             from gui import GuiDependencyFout, start_gui
@@ -160,6 +159,7 @@ def main(argv=None, invoer=input, uitvoer=None):
             except GuiDependencyFout as fout:
                 uitvoer.write(f"FOUT: {fout}\n")
                 return 1
+        uitvoer.write(BANNER + "\n")
         if args.demo:
             from tools.create_demo_recovery_test import voer_demo_uit
             voer_demo_uit(uitvoer=uitvoer)

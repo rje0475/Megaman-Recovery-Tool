@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 from core.external_tools import detecteer_7zip, detecteer_winrar
+from core.progress import maak_progress
 from core.salvage_classification import classificeer_salvage_resultaat
 from core.salvage_compare import vergelijk_extractie
 from core.salvage_extractor import salvage_extract, winrar_salvage_extract
@@ -422,6 +423,7 @@ def voer_salvage_workflow_uit(
     bronmap, workspace=None, rar_set=None, skip_par2=False,
     skip_winrar=False, no_spotify=False, database_pad=DATABASE_BESTAND,
     uitvoer=None, winrar_runner=None, sevenzip_runner=None,
+    progress_callback=None,
 ):
     uitvoer = uitvoer or sys.stdout
     bronmap = Path(bronmap).resolve()
@@ -445,6 +447,11 @@ def voer_salvage_workflow_uit(
     samenvattingen = []
     try:
         # De bestaande repairservice verwerkt alle REPAIRABLE sets eenmalig.
+        if progress_callback:
+            progress_callback(maak_progress(
+                "PAR2", 0, len(sets),
+                "PAR2-status en herstelmogelijkheden controleren.",
+            ))
         if not skip_par2:
             aantal = database.verbinding.execute(
                 "SELECT COUNT(*) aantal FROM par_inventory WHERE status='REPAIRABLE'"
@@ -490,6 +497,13 @@ def voer_salvage_workflow_uit(
                     "PAR2 onvoldoende; WinRAR/7-Zip salvage wordt geprobeerd.\n"
                 )
             if not skip_winrar and bronstatus != "COMPLETE":
+                if progress_callback:
+                    progress_callback(maak_progress(
+                        "RAR Recovery",
+                        len(samenvattingen),
+                        len(sets),
+                        f"RAR-recovery voor {set_.main_archive.name}.",
+                    ))
                 uitvoer.write(
                     "WinRAR/RAR executable: "
                     f"{winrar_tool.pad or 'niet gevonden'}\n"
@@ -617,6 +631,11 @@ def voer_salvage_workflow_uit(
                     """, (set_.sleutel,)
                 )
             ]
+            if progress_callback:
+                progress_callback(maak_progress(
+                    "Validatie", 0, len(verwacht),
+                    "Uitgepakte MP3-bestanden vergelijken.",
+                ))
             ruwe_vergelijking = vergelijk_extractie(verwacht, extracted)
             analyse_rijen = database.verbinding.execute(
                 """
@@ -633,6 +652,18 @@ def voer_salvage_workflow_uit(
                 ruwe_vergelijking, analyse_rijen,
                 wortels=(bronmap, workspace, extracted),
             )
+            if progress_callback:
+                progress_callback(maak_progress(
+                    "Validatie",
+                    len(verwacht),
+                    len(verwacht),
+                    "Vergelijking en audioclassificatie voltooid.",
+                    ok_count=classificatie.volledig_goed,
+                    ffmpeg_error_count=(
+                        classificatie.ffmpeg_fouten_ingelezen
+                    ),
+                    zero_byte_count=classificatie.nul_bytes,
+                ))
             vergelijking = classificatie.vergelijking
             gevonden_mp3s = sum(
                 1 for pad in extracted.rglob("*")
@@ -642,6 +673,11 @@ def voer_salvage_workflow_uit(
                 "Extracted-map opnieuw gescand\n"
                 f"Uitgepakte MP3's gevonden: {gevonden_mp3s}\n"
             )
+            if progress_callback:
+                progress_callback(maak_progress(
+                    "Recovery Items", 0, len(verwacht),
+                    "Definitieve recovery-items synchroniseren.",
+                ))
             recovery_items = _synchroniseer_recovery(
                 database, set_.sleutel, vergelijking, recovery_set_id
             )
@@ -692,6 +728,18 @@ def voer_salvage_workflow_uit(
                 f"Definitieve recovery-items: {recovery_items}\n"
             )
             samenvattingen.append(samenvatting)
+            if progress_callback:
+                progress_callback(maak_progress(
+                    "Recovery Items",
+                    len(verwacht),
+                    len(verwacht),
+                    f"{recovery_items} recovery-items opgeslagen.",
+                    ok_count=goed,
+                    ffmpeg_error_count=(
+                        classificatie.ffmpeg_fouten_ingelezen
+                    ),
+                    zero_byte_count=nul,
+                ))
     finally:
         database.sluit()
     return tuple(samenvattingen)

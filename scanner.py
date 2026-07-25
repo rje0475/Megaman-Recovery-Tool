@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from database import voeg_mp3_toe
 from database import zet_ffmpeg_status
 from database import zet_nul_bytes
+from core.progress import maak_progress
 
 
 FFMPEG = r"C:\ffmpeg\ffmpeg.exe"
@@ -148,7 +149,10 @@ def toon_voortgang(verwerkt, totaal, goed, ffmpeg_fouten, nul_bytes):
     sys.stdout.flush()
 
 
-def controleer_mp3_bestanden(mp3_bestanden, basis_map, database):
+def controleer_mp3_bestanden(
+    mp3_bestanden, basis_map, database,
+    progress_callback=None, console_progress=True,
+):
     """
     Controleer alle MP3-bestanden parallel.
     """
@@ -163,7 +167,28 @@ def controleer_mp3_bestanden(mp3_bestanden, basis_map, database):
     totaal = len(mp3_bestanden)
     verwerkt = 0
 
-    toon_voortgang(verwerkt, totaal, goed, ffmpeg_fouten, len(nul_bytes))
+    def meld_voortgang():
+        if progress_callback:
+            progress_callback(maak_progress(
+                "Validatie",
+                verwerkt,
+                totaal,
+                (
+                    "MP3-bestanden controleren"
+                    if not totaal else
+                    f"MP3-bestanden controleren — bestand "
+                    f"{verwerkt} van {totaal}"
+                ),
+                ok_count=goed,
+                ffmpeg_error_count=ffmpeg_fouten,
+                zero_byte_count=len(nul_bytes),
+            ))
+        if console_progress:
+            toon_voortgang(
+                verwerkt, totaal, goed, ffmpeg_fouten, len(nul_bytes)
+            )
+
+    meld_voortgang()
 
     with ThreadPoolExecutor(max_workers=AANTAL_THREADS) as executor:
 
@@ -207,14 +232,9 @@ def controleer_mp3_bestanden(mp3_bestanden, basis_map, database):
                 goed += 1
 
             verwerkt += 1
-            toon_voortgang(
-                verwerkt,
-                totaal,
-                goed,
-                ffmpeg_fouten,
-                len(nul_bytes)
-            )
+            meld_voortgang()
 
-    sys.stdout.write("\n")
+    if console_progress:
+        sys.stdout.write("\n")
 
     return goed, nul_bytes

@@ -158,34 +158,42 @@ voortgang, huidige stap en gelogde backendmeldingen worden realtime bijgewerkt.
 
 Handmatige praktijktest:
 
-1. Start met `python main.py --gui`.
-2. Kies met **Bladeren…** de bronmap met de originele RAR/PAR2-set.
-3. Klik **Start** en controleer dat stappen, percentage, huidige stap en log
-   tijdens de workflow veranderen.
-4. Verplaats of vergroot het venster tijdens een lange stap om te controleren
-   dat de interface responsief blijft.
-5. Na een geslaagde sync wordt **Spotify-playlist openen** actief; deze opent
+1. Haal de branch op met
+   `git pull origin feature/salvage-rar-recovery-workflow`.
+2. Activeer de virtuele omgeving, bijvoorbeeld met
+   `.\.venv\Scripts\Activate.ps1`.
+3. Start met `python main.py --gui`.
+4. Kies met **Bladeren…** een tijdelijke NZBGet-map met de originele
+   RAR/PAR2-set.
+5. Controleer vóór Start dat de recovery-set uit database, hoofd-RAR of PAR2
+   is afgeleid en niet uit een tijdelijke NZBGet-hash wanneer een betere naam
+   beschikbaar is.
+6. Klik **Start**. PowerShell blijft leeg; huidige stap, huidige activiteit,
+   voortgang en vaste tellerlabels veranderen in het venster.
+7. Controleer dat Analyse eindigt, iedere volgende fase pas daarna actief
+   wordt en geen fase permanent actief blijft.
+8. Verplaats of vergroot het venster tijdens validatie en Spotify Search om
+   te controleren dat de interface responsief blijft.
+9. Controleer na afloop het eindoverzicht, de opnieuw actieve Start-knop en
+   **Spotify-playlist openen**. Deze opent
    `https://open.spotify.com/playlist/<playlist-id>`.
-6. Een lege of niet-bestaande bron geeft een leesbare waarschuwing en start
-   geen worker.
-7. Zonder Spotify-credentials of bruikbare autorisatie worden Spotify Search
-   en/of Playlist Sync als overgeslagen gemarkeerd; recovery en rapportage
-   blijven beschikbaar.
+10. Test een lege of niet-bestaande bron; er verschijnt een waarschuwing en
+    er start geen worker.
+11. Test zonder Spotify-credentials/netwerk; Spotify Search en/of Playlist
+    Sync worden gemotiveerd overgeslagen, terwijl rapportage beschikbaar
+    blijft.
+12. Probeer tijdens een actieve workflow het venster te sluiten. De GUI
+    blokkeert sluiten met de melding dat de workflow nog loopt. Sluit opnieuw
+    nadat de workflow klaar is; er hoort geen `QThread destroyed`-waarschuwing
+    te verschijnen.
 
 Het eindoverzicht toont de recovery-set, recovery-items, alle Spotify-statussen,
 nieuwe en reeds aanwezige playlisttracks, playlistnaam en eindstatus. Er worden
 geen secrets, access tokens, refresh tokens of autorisatie-URL's gelogd.
 
-De bestaande losse acties blijven beschikbaar:
-
-- **Analyseren** gebruikt de bestaande read-only analyse.
-- **Repareren** verwerkt uitsluitend PAR2-datasets met status `REPAIRABLE`.
-- **Uitpakken** verwerkt uitsluitend datasets met status `COMPLETE`.
-- **Rapport tonen** toont het laatst opgeslagen rapport.
-
-Repareren kan bronbestanden wijzigen of aanmaken. Uitpakken maakt bestanden
-aan in de extractiedoelmap. Daarom vraagt de GUI voor beide acties altijd om
-bevestiging; analyse start nooit automatisch een reparatie of extractie.
+Het hoofdvenster toont uitsluitend de begeleide workflow. De achterliggende
+losse CLI-, review-, recovery- en Spotifyfuncties blijven beschikbaar voor
+CLI-gebruik en een eventueel later handmatig reviewscherm.
 
 # Slim zoeken en Spotify-versies
 

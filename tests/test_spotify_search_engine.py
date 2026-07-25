@@ -502,6 +502,42 @@ class SpotifySearchEngineDatabaseTest(unittest.TestCase):
         self.assertEqual(summary.total, 24)
         self.assertEqual(summary.processed, 24)
 
+    def test_progress_telt_items_niet_querypogingen(self):
+        self._item("Artist", "Song", "set/een.mp3")
+        self._item("Nobody", "Missing", "set/twee.mp3")
+        client = FakeSpotifyClient({
+            'artist:"Artist" track:"Song"': (
+                track("match", "Artist", "Song"),
+            ),
+        })
+        progress = []
+        log = io.StringIO()
+        summary = voer_spotify_search_uit(
+            self.db,
+            recovery_set_id=self.set_id,
+            client=client,
+            uitvoer=log,
+            progress_callback=progress.append,
+            verbose_items=False,
+        )
+        self.assertEqual(summary.total, 2)
+        self.assertEqual(len(client.queries), 6)
+        self.assertEqual(progress[-1].current, 2)
+        self.assertEqual(progress[-1].total, 2)
+        self.assertEqual(progress[-1].percent, 100)
+        self.assertEqual(
+            progress[-1].matched_count
+            + progress[-1].low_confidence_count
+            + progress[-1].manual_review_count
+            + progress[-1].not_found_count
+            + progress[-1].error_count,
+            2,
+        )
+        self.assertEqual(
+            sum(item.percent == 100 for item in progress), 1
+        )
+        self.assertNotIn("Spotify zoeken:", log.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

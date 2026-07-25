@@ -52,6 +52,9 @@ def voer_analyse(
     rar_map=None,
     database_pad=DATABASE_BESTAND,
     uitvoer=None,
+    progress_callback=None,
+    console_progress=True,
+    include_legacy_spotify=True,
 ):
     """Voer de volledige bestaande read-only analysekern één keer uit."""
 
@@ -70,7 +73,13 @@ def voer_analyse(
     database = maak_database(database_pad)
     try:
         uitvoer.write("\nMP3's scannen...\n")
-        controleer_mp3_bestanden(mp3_bestanden, mp3_map, database)
+        controleer_mp3_bestanden(
+            mp3_bestanden,
+            mp3_map,
+            database,
+            progress_callback=progress_callback,
+            console_progress=console_progress,
+        )
 
         uitvoer.write("\nRAR-inventaris uitlezen...\n")
         voer_rar_inventory_uit(
@@ -91,9 +100,10 @@ def voer_analyse(
         genereer_recovery_items(database, uitvoer=uitvoer)
         bepaal_recovery_identiteiten(database, uitvoer=uitvoer)
 
-        uitvoer.write("\nSpotify-verrijking...\n")
-        voer_spotify_scan_uit(database, uitvoer=uitvoer)
-        voer_spotify_recovery_uit(database, uitvoer=uitvoer)
+        if include_legacy_spotify:
+            uitvoer.write("\nSpotify-verrijking...\n")
+            voer_spotify_scan_uit(database, uitvoer=uitvoer)
+            voer_spotify_recovery_uit(database, uitvoer=uitvoer)
 
         totaal = len(database)
         goed = sum(

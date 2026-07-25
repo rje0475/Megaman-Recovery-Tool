@@ -15,6 +15,7 @@ from core.spotify.models import (
 )
 from core.spotify.parsing import parseer_recovery_itemnaam
 from core.spotify.scoring import bereken_score
+from core.progress import maak_progress
 
 
 MATCH_THRESHOLD = 0.95
@@ -137,6 +138,32 @@ def _bewaar_match(database, item_id, match):
     database.verbinding.commit()
 
 
+def definitieve_spotify_telling(database, recovery_set_id):
+    telling = {
+        MATCHED: 0,
+        LOW_CONFIDENCE: 0,
+        MANUAL_REVIEW: 0,
+        NOT_FOUND: 0,
+        "ERROR": 0,
+    }
+    for rij in database.verbinding.execute(
+        """
+        SELECT spotify_status, COUNT(*) aantal
+        FROM recovery_items
+        WHERE recovery_set_id=?
+          AND probleem_bron LIKE '%salvage%'
+        GROUP BY spotify_status
+        """,
+        (recovery_set_id,),
+    ):
+        status = rij["spotify_status"]
+        if status in MANUAL_STATUSES:
+            status = MANUAL_REVIEW
+        if status in telling:
+            telling[status] += rij["aantal"]
+    return telling
+
+
 def beschikbare_recovery_sets(database):
     rijen = database.verbinding.execute(
         """
@@ -208,6 +235,7 @@ def _selecteer_recovery_set(
 def voer_spotify_search_uit(
     database, recovery_set_id=None, archive_set_name=None,
     force=False, allow_large_batch=False, client=None, uitvoer=None,
+    progress_callback=None, verbose_items=True,
 ):
     uitvoer = uitvoer or sys.stdout
     recovery_set, automatisch = _selecteer_recovery_set(
@@ -267,6 +295,24 @@ def voer_spotify_search_uit(
         MATCHED: 0, LOW_CONFIDENCE: 0,
         NOT_FOUND: 0, MANUAL_REVIEW: 0,
     }
+    def meld_progress(message):
+        if not progress_callback:
+            return
+        definitief = definitieve_spotify_telling(database, set_id)
+        verwerkt = sum(definitief.values())
+        progress_callback(maak_progress(
+            "Spotify Search",
+            verwerkt,
+            totaal,
+            message,
+            matched_count=definitief[MATCHED],
+            low_confidence_count=definitief[LOW_CONFIDENCE],
+            manual_review_count=definitief[MANUAL_REVIEW],
+            not_found_count=definitief[NOT_FOUND],
+            error_count=definitief["ERROR"],
+        ))
+
+    meld_progress("Spotify-resultaten voorbereiden.")
     for item in items:
         parsed = parseer_recovery_itemnaam(
             item["verwacht_rel_pad"],
@@ -274,7 +320,10 @@ def voer_spotify_search_uit(
             item["bepaalde_titel"],
         )
         artiest, titel = parsed.artist, parsed.title
-        uitvoer.write(f"\nSpotify zoeken:\n{artiest} - {titel}\n")
+        if verbose_items:
+            uitvoer.write(
+                f"\nSpotify zoeken:\n{artiest} - {titel}\n"
+            )
         if not artiest or not titel:
             match = SpotifyMatch(None, None, None, MANUAL_REVIEW)
         else:
@@ -284,17 +333,19 @@ def voer_spotify_search_uit(
                     _lokale_duur_ms(item["local_file"]),
                 )
             except SpotifyApiError as error:
-                uitvoer.write(f"Spotify API-fout: {error}\n")
+                if verbose_items:
+                    uitvoer.write(f"Spotify API-fout: {error}\n")
                 match = SpotifyMatch(None, None, None, MANUAL_REVIEW)
         _bewaar_match(database, item["id"], match)
         telling[match.status] += 1
-        if match.track:
+        meld_progress(f"{artiest} - {titel} verwerkt.")
+        if match.track and verbose_items:
             uitvoer.write(
                 f"Match:\n{', '.join(match.track.artists)} - "
                 f"{match.track.title}\nConfidence:\n"
                 f"{match.confidence:.0%}\nStatus:\n{match.status}\n"
             )
-        else:
+        elif verbose_items:
             uitvoer.write(
                 "Geen Spotify-resultaat gevonden\n"
                 f"Status:\n{match.status}\n"
