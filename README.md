@@ -150,7 +150,33 @@ Start daarna de PySide6-interface:
 python main.py --gui
 ```
 
-De GUI biedt vier expliciete acties:
+De hoofdactie **Start** voert één recovery-set buiten de GUI-thread uit. Het
+venster toont voor `Analyse`, `PAR2`, `RAR Recovery`, `Validatie`,
+`Recovery Items`, `Spotify Search`, `Playlist Sync` en `Rapport` steeds de
+toestand wachtend, actief, voltooid, overgeslagen of mislukt. De algemene
+voortgang, huidige stap en gelogde backendmeldingen worden realtime bijgewerkt.
+
+Handmatige praktijktest:
+
+1. Start met `python main.py --gui`.
+2. Kies met **Bladeren…** de bronmap met de originele RAR/PAR2-set.
+3. Klik **Start** en controleer dat stappen, percentage, huidige stap en log
+   tijdens de workflow veranderen.
+4. Verplaats of vergroot het venster tijdens een lange stap om te controleren
+   dat de interface responsief blijft.
+5. Na een geslaagde sync wordt **Spotify-playlist openen** actief; deze opent
+   `https://open.spotify.com/playlist/<playlist-id>`.
+6. Een lege of niet-bestaande bron geeft een leesbare waarschuwing en start
+   geen worker.
+7. Zonder Spotify-credentials of bruikbare autorisatie worden Spotify Search
+   en/of Playlist Sync als overgeslagen gemarkeerd; recovery en rapportage
+   blijven beschikbaar.
+
+Het eindoverzicht toont de recovery-set, recovery-items, alle Spotify-statussen,
+nieuwe en reeds aanwezige playlisttracks, playlistnaam en eindstatus. Er worden
+geen secrets, access tokens, refresh tokens of autorisatie-URL's gelogd.
+
+De bestaande losse acties blijven beschikbaar:
 
 - **Analyseren** gebruikt de bestaande read-only analyse.
 - **Repareren** verwerkt uitsluitend PAR2-datasets met status `REPAIRABLE`.

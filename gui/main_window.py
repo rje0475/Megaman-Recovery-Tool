@@ -1,5 +1,6 @@
 """Hoofdvenster dat bestaande Megaman-kernfuncties orkestreert."""
 
+from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QUrl
@@ -27,7 +28,8 @@ from analyse import voer_analyse
 from database import DATABASE_BESTAND, SQLiteDatabase
 from rar_extractor import voer_extractie_uit
 
-from gui.workers import ActionWorker
+from gui.workers import ActionWorker, WorkflowWorker
+from gui.workflow import RecoveryGuiWorkflow, WORKFLOW_STAGES
 from spotify_smart import (
     kies_kandidaat,
     markeer_geen_kandidaat,
@@ -44,6 +46,22 @@ STATISTIEKEN = (
     ("repairable", "REPAIRABLE"),
     ("not_repairable", "NOT_REPAIRABLE"),
 )
+
+STAGE_SYMBOLS = {
+    "wachtend": "○",
+    "actief": "▶",
+    "voltooid": "✓",
+    "overgeslagen": "—",
+    "mislukt": "✗",
+}
+
+
+def spotify_playlist_url(playlist_id):
+    playlist_id = str(playlist_id or "").strip()
+    return (
+        f"https://open.spotify.com/playlist/{playlist_id}"
+        if playlist_id else None
+    )
 
 
 def _voer_reparatie_uit(map_pad, uitvoer=None):
@@ -105,12 +123,19 @@ class MegamanMainWindow(QMainWindow):
     def __init__(
         self,
         worker_factory=ActionWorker,
+        workflow_worker_factory=WorkflowWorker,
+        workflow_factory=RecoveryGuiWorkflow,
         statistics_reader=lees_statistieken,
     ):
         super().__init__()
         self.worker_factory = worker_factory
+        self.workflow_worker_factory = workflow_worker_factory
+        self.workflow_factory = workflow_factory
         self.statistics_reader = statistics_reader
         self.worker = None
+        self.workflow_worker = None
+        self.workflow_running = False
+        self.playlist_id = None
         self.setWindowTitle("Megaman Recovery Tool")
         self.resize(900, 650)
         self._bouw_interface()
@@ -123,11 +148,13 @@ class MegamanMainWindow(QMainWindow):
         maprij = QHBoxLayout()
         self.map_invoer = QLineEdit()
         self.map_invoer.setPlaceholderText("Selecteer een downloadmap")
-        self.bladeren_knop = QPushButton("Bladeren")
+        self.map_invoer.setReadOnly(True)
+        self.bladeren_knop = QPushButton("Bladeren…")
         self.bladeren_knop.clicked.connect(self._bladeren)
         maprij.addWidget(self.map_invoer)
         maprij.addWidget(self.bladeren_knop)
         layout.addLayout(maprij)
+        self._bouw_centrale_workflow(layout)
 
         actierij = QHBoxLayout()
         self.analyseren_knop = QPushButton("Analyseren")
@@ -172,6 +199,45 @@ class MegamanMainWindow(QMainWindow):
         self.logvenster.setReadOnly(True)
         layout.addWidget(self.logvenster, stretch=1)
         self.setCentralWidget(centraal)
+
+    def _bouw_centrale_workflow(self, layout):
+        setrij = QHBoxLayout()
+        setrij.addWidget(QLabel("Recovery-set:"))
+        self.recovery_set_label = QLabel("Nog niet bepaald")
+        setrij.addWidget(self.recovery_set_label, stretch=1)
+        layout.addLayout(setrij)
+
+        layout.addWidget(QLabel("Workflow"))
+        stappen = QGridLayout()
+        self.stage_labels = {}
+        for index, stage in enumerate(WORKFLOW_STAGES):
+            status = QLabel()
+            self.stage_labels[stage] = status
+            stappen.addWidget(status, index // 2, index % 2)
+            self._set_stage_state(stage, "wachtend")
+        layout.addLayout(stappen)
+
+        layout.addWidget(QLabel("Huidige stap:"))
+        self.huidige_stap_label = QLabel("Geen")
+        layout.addWidget(self.huidige_stap_label)
+
+        self.start_knop = QPushButton("Start")
+        self.start_knop.clicked.connect(self._start_workflow)
+        self.playlist_knop = QPushButton("Spotify-playlist openen")
+        self.playlist_knop.setEnabled(False)
+        self.playlist_knop.clicked.connect(self._open_playlist)
+        workflowknoppen = QHBoxLayout()
+        workflowknoppen.addStretch(1)
+        workflowknoppen.addWidget(self.start_knop)
+        workflowknoppen.addWidget(self.playlist_knop)
+        workflowknoppen.addStretch(1)
+        layout.addLayout(workflowknoppen)
+
+        self.eindoverzicht = QLabel(
+            "Eindoverzicht verschijnt na de workflow."
+        )
+        self.eindoverzicht.setWordWrap(True)
+        layout.addWidget(self.eindoverzicht)
 
     def _bouw_spotify(self, layout):
         layout.addWidget(QLabel("Spotify-kandidaten"))
@@ -236,6 +302,7 @@ class MegamanMainWindow(QMainWindow):
         )
         if map_pad:
             self.map_invoer.setText(map_pad)
+            self.recovery_set_label.setText(Path(map_pad).name)
 
     def _geldige_map(self):
         map_pad = Path(self.map_invoer.text().strip().strip('"'))
@@ -319,6 +386,122 @@ class MegamanMainWindow(QMainWindow):
         self.worker.failed.connect(self._actie_mislukt)
         self.worker.completed.connect(self._actie_afgerond)
         self.worker.start()
+
+    def _start_workflow(self):
+        if self.workflow_running:
+            self._workflow_log(
+                "Er draait al een workflow; dubbele start genegeerd."
+            )
+            return
+        map_pad = self._geldige_map()
+        if map_pad is None:
+            return
+        self.workflow_running = True
+        self.playlist_id = None
+        self.playlist_knop.setEnabled(False)
+        self.eindoverzicht.setText("Workflow wordt uitgevoerd…")
+        self.voortgang.setValue(0)
+        self.statusregel.setText("Workflow gestart.")
+        self.huidige_stap_label.setText("Voorbereiden")
+        for stage in WORKFLOW_STAGES:
+            self._set_stage_state(stage, "wachtend")
+        self._zet_actief(False)
+        self.start_knop.setEnabled(False)
+        self.workflow_worker = self.workflow_worker_factory(
+            self.workflow_factory(), map_pad
+        )
+        worker = self.workflow_worker
+        worker.stage_started.connect(self._workflow_stage_started)
+        worker.stage_progress.connect(self._workflow_stage_progress)
+        worker.stage_completed.connect(
+            lambda stage: self._set_stage_state(stage, "voltooid")
+        )
+        worker.stage_skipped.connect(self._workflow_stage_skipped)
+        worker.stage_failed.connect(self._workflow_stage_failed)
+        worker.log_message.connect(self._workflow_log)
+        worker.workflow_completed.connect(self._workflow_completed)
+        worker.workflow_failed.connect(self._workflow_failed)
+        worker.finished.connect(self._workflow_finished)
+        worker.start()
+
+    def _set_stage_state(self, stage, state, detail=None):
+        label = self.stage_labels.get(stage)
+        if label is None:
+            return
+        tekst = f"{STAGE_SYMBOLS[state]} {stage} — {state}"
+        if detail:
+            tekst += f": {detail}"
+        label.setText(tekst)
+        label.setProperty("workflowState", state)
+
+    def _workflow_stage_started(self, stage):
+        self.huidige_stap_label.setText(stage)
+        self.statusregel.setText(f"Bezig: {stage}")
+        self._set_stage_state(stage, "actief")
+
+    def _workflow_stage_progress(
+        self, stage, current, total, message
+    ):
+        percentage = round(100 * current / total) if total else 0
+        self.voortgang.setValue(max(0, min(100, percentage)))
+        self.statusregel.setText(message or f"Bezig: {stage}")
+
+    def _workflow_stage_skipped(self, stage, reason):
+        self._set_stage_state(stage, "overgeslagen", reason)
+
+    def _workflow_stage_failed(self, stage, error):
+        self._set_stage_state(stage, "mislukt", error)
+
+    def _workflow_log(self, message):
+        for regel in str(message or "").splitlines():
+            if not regel:
+                continue
+            tijd = datetime.now().strftime("%H:%M:%S")
+            self.logvenster.appendPlainText(f"[{tijd}] {regel}")
+        cursor = self.logvenster.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        self.logvenster.setTextCursor(cursor)
+        self.logvenster.ensureCursorVisible()
+
+    def _workflow_completed(self, summary):
+        self.voortgang.setValue(100)
+        self.huidige_stap_label.setText("Voltooid")
+        self.statusregel.setText(
+            f"Workflow {summary.get('status', 'voltooid')}."
+        )
+        setnaam = summary.get("recovery_set") or "Onbekend"
+        self.recovery_set_label.setText(setnaam)
+        self.playlist_id = summary.get("playlist_id")
+        self.playlist_knop.setEnabled(bool(self.playlist_id))
+        self.eindoverzicht.setText(
+            f"Recovery-set: {setnaam}\n"
+            f"Recovery-items: {summary.get('recovery_items', 0)} | "
+            f"MATCHED: {summary.get('matched', 0)} | "
+            f"LOW_CONFIDENCE: {summary.get('low_confidence', 0)} | "
+            f"MANUAL_REVIEW: {summary.get('manual_review', 0)} | "
+            f"NOT_FOUND: {summary.get('not_found', 0)}\n"
+            f"Nieuwe playlisttracks: {summary.get('playlist_added', 0)} | "
+            f"Reeds aanwezig: {summary.get('playlist_existing', 0)} | "
+            f"Playlist: {summary.get('playlist_name') or 'niet beschikbaar'}"
+            f"\nEindstatus: {summary.get('status', 'onbekend')}"
+        )
+
+    def _workflow_failed(self, error):
+        melding = error or "Onbekende workflowfout."
+        self.statusregel.setText("Workflow mislukt.")
+        self.eindoverzicht.setText(f"Eindstatus: mislukt\n{melding}")
+        QMessageBox.critical(self, "Workflow mislukt", melding)
+
+    def _workflow_finished(self):
+        self.workflow_running = False
+        self._zet_actief(True)
+        self.start_knop.setEnabled(True)
+        self.playlist_knop.setEnabled(bool(self.playlist_id))
+
+    def _open_playlist(self):
+        url = spotify_playlist_url(self.playlist_id)
+        if url:
+            QDesktopServices.openUrl(QUrl(url))
 
     def _log(self, tekst):
         self.logvenster.moveCursor(
