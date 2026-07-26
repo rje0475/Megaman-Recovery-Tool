@@ -17,6 +17,8 @@ DOWNLOADED = "DOWNLOADED"
 PROCESSING = "PROCESSING"
 VALIDATING = "VALIDATING"
 PROCESSED = "PROCESSED"
+FINALIZING = "FINALIZING"
+RECOVERED = "RECOVERED"
 PAUSED = "PAUSED"
 COMPLETED = "COMPLETED"
 FAILED = "FAILED"
@@ -25,7 +27,7 @@ SKIPPED = "SKIPPED"
 STATUSES = frozenset({
     WAITING, QUEUED, PREPARING, RUNNING, PAUSED,
     DOWNLOADING, VERIFYING, DOWNLOADED, PROCESSING, VALIDATING, PROCESSED,
-    COMPLETED, FAILED, CANCELLED, SKIPPED,
+    FINALIZING, RECOVERED, COMPLETED, FAILED, CANCELLED, SKIPPED,
 })
 LOGGER = logging.getLogger(__name__)
 
@@ -67,6 +69,12 @@ class DownloadJob:
     source_duration: float | None = None
     source_format: str | None = None
     source_removed: bool = False
+    final_path: str | None = None
+    filename: str | None = None
+    metadata_written: bool = False
+    artwork_written: bool = False
+    finalization_status: str | None = None
+    final_size: int | None = None
 
 
 class DownloadQueueManager:
@@ -96,7 +104,7 @@ class DownloadQueueManager:
         self.database.verbinding.commit()
         rows = self.database.verbinding.execute(
             """SELECT job_id,status,download_path,processed_path,processing_status
-            FROM download_queue WHERE status IN ('PROCESSING','VALIDATING','COMPLETED')"""
+            FROM download_queue WHERE status IN ('PROCESSING','VALIDATING','FINALIZING','COMPLETED')"""
         ).fetchall()
         for row in rows:
             processed = Path(row["processed_path"]) if row["processed_path"] else None
@@ -206,10 +214,10 @@ class DownloadQueueManager:
         finished = row["finished_at"]
         if status in {RUNNING, DOWNLOADING} and not started:
             started = now
-        if status in {PROCESSED, COMPLETED, FAILED, CANCELLED, SKIPPED}:
+        if status in {RECOVERED, COMPLETED, FAILED, CANCELLED, SKIPPED}:
             finished = now
         if progress is None:
-            progress = 100 if status in {PROCESSED, COMPLETED} else row["progress"]
+            progress = 100 if status in {RECOVERED, COMPLETED} else row["progress"]
         self.database.verbinding.execute(
             """UPDATE download_queue SET status=?,progress=?,last_stage=?,
             error_code=?,last_error=?,started_at=?,finished_at=?,updated_at=?
@@ -318,6 +326,44 @@ class DownloadQueueManager:
             error_code=error.code, error_message=str(error),
         )
 
+    def start_finalization(self, job_id):
+        self.database.verbinding.execute(
+            """UPDATE download_queue SET finalization_status='FINALIZING',
+            finalization_error_code=NULL,finalization_error_message=NULL WHERE job_id=?""",
+            (job_id,),
+        )
+        self.database.verbinding.commit()
+        return self.transition(job_id, FINALIZING, "Metadata en eindlocatie", 0)
+
+    def complete_finalization(self, job_id, result):
+        now = self._now()
+        self.database.verbinding.execute(
+            """UPDATE download_queue SET final_path=?,filename=?,final_size=?,
+            metadata_written=?,artwork_written=?,finalized_at=?,
+            finalization_status='RECOVERED',written_tags=?,processed_path=NULL
+            WHERE job_id=?""",
+            (str(result.final_path), result.filename, result.size,
+             int(result.metadata_written), int(result.artwork_written), now,
+             ",".join(result.tags), job_id),
+        )
+        self.database.verbinding.execute(
+            """UPDATE recovery_items SET geplaatst=1,download_verwerkt=1,
+            bijgewerkt_op=? WHERE id=(SELECT recovery_item_id FROM download_queue
+            WHERE job_id=?)""", (now, job_id),
+        )
+        self.database.verbinding.commit()
+        return self.transition(job_id, RECOVERED, "Herstel voltooid", 100)
+
+    def fail_finalization(self, job_id, error):
+        self.database.verbinding.execute(
+            """UPDATE download_queue SET finalization_status='FAILED',
+            finalization_error_code=?,finalization_error_message=? WHERE job_id=?""",
+            (error.code, str(error), job_id),
+        )
+        self.database.verbinding.commit()
+        return self.transition(job_id, FAILED, "Finalisatie mislukt",
+                               error_code=error.code, error_message=str(error))
+
     def mark_source_removed(self, job_id):
         self.database.verbinding.execute(
             "UPDATE download_queue SET source_removed=1,updated_at=? WHERE job_id=?",
@@ -365,7 +411,7 @@ class DownloadQueueManager:
 
     def clear_completed(self):
         cursor = self.database.verbinding.execute(
-            "DELETE FROM download_queue WHERE status IN ('COMPLETED','PROCESSED')"
+            "DELETE FROM download_queue WHERE status IN ('COMPLETED','RECOVERED')"
         )
         self.database.verbinding.commit()
         self._renumber()
@@ -454,4 +500,9 @@ class DownloadQueueManager:
             source_duration=row["source_duration"],
             source_format=row["source_format"],
             source_removed=bool(row["source_removed"]),
+            final_path=row["final_path"], filename=row["filename"],
+            metadata_written=bool(row["metadata_written"]),
+            artwork_written=bool(row["artwork_written"]),
+            finalization_status=row["finalization_status"],
+            final_size=row["final_size"],
         )

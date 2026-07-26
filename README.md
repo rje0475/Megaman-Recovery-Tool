@@ -441,3 +441,36 @@ projectconfiguratie gebruikt. Ontbrekende tools leveren een opgeslagen
 jobfout op en laten de brondownload intact. Deze fase schrijft geen ID3-tags,
 voegt geen albumcover toe, bepaalt geen definitieve bestandsnaam, verplaatst
 niets naar weekmappen en markeert geen recovery-item als volledig hersteld.
+
+## Metadata & Finalization Pipeline (fase 6)
+
+Na `PROCESSED` gebruikt de finalisatiefase uitsluitend de expliciet opgeslagen
+Spotify-keuze en recoverygegevens. YouTube blijft alleen de audiobron. Mutagen
+schrijft titel, artiest, album, albumartiest, track/disc (indien bekend), jaar,
+genre (indien bekend), de herstelcomment en de hoogst beschikbare opgeslagen
+Spotify-cover als JPEG/APIC. Covers worden per URL gecachet.
+
+Het bestand wordt eerst als verborgen stagingbestand in de doelmap gekopieerd,
+daar van metadata voorzien en opnieuw gevalideerd. Pas daarna wordt het
+atomisch gepubliceerd en wordt `processed_audio.mp3` verwijderd. Bij iedere
+fout blijft de gevalideerde processing-uitvoer behouden. Standaard ontstaat:
+
+```text
+Recovered/<jaar>/Week <week>/<artiest> - <titel>.mp3
+```
+
+Lokale configuratie gebeurt zonder ontwikkelpaden in Git:
+
+```powershell
+$env:OUTPUT_ROOT="D:\Recovered"
+$env:FILENAME_TEMPLATE="{artist} - {title}.mp3"
+$env:FOLDER_TEMPLATE="{year}/Week {week}"
+$env:COLLISION_POLICY="Rename"  # Rename, Overwrite of Skip
+$env:MAX_FINAL_PATH_LENGTH="240"
+$env:ARTWORK_CACHE="downloads/artwork_cache"
+```
+
+Ook `{track} - {artist} - {title}` en
+`{year}-{week} - {artist} - {title}` worden ondersteund. Na een succesvolle
+ID3/APIC-controle krijgt de job `RECOVERED` en wordt het recovery-item als
+geplaatst en verwerkt gemarkeerd.

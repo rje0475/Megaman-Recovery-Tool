@@ -11,8 +11,8 @@ from PySide6.QtWidgets import (
 
 from core.download.worker import DownloadQueueWorker
 from core.download_queue import (
-    CANCELLED, COMPLETED, DOWNLOADING, FAILED, PAUSED, PREPARING, PROCESSED,
-    QUEUED, RUNNING, WAITING, DownloadQueueManager,
+    CANCELLED, COMPLETED, DOWNLOADING, FAILED, FINALIZING, PAUSED, PREPARING,
+    PROCESSED, QUEUED, RECOVERED, RUNNING, WAITING, DownloadQueueManager,
 )
 from database import DATABASE_BESTAND, SQLiteDatabase
 
@@ -99,12 +99,13 @@ class DownloadQueueDialog(QDialog):
         )
         self.notice.setWordWrap(True)
         layout.addWidget(self.notice)
-        self.table = QTableWidget(0, 21)
+        self.table = QTableWidget(0, 25)
         self.table.setHorizontalHeaderLabels((
             "Positie", "Status", "Fase", "Artiest", "Titel",
             "Downloadstatus", "Processingstatus", "Voortgang", "KB/s", "ETA",
             "Brongrootte", "Bronbestand", "Verwerkt bestand", "Bronduur",
             "Verwerkte duur", "Codec", "Bitrate", "Sample rate", "Kanalen", "Retries",
+            "Metadata", "Artwork", "Bestandsnaam", "Finale locatie",
             "Fout / waarschuwing",
         ))
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -120,6 +121,8 @@ class DownloadQueueDialog(QDialog):
             ("Move Up", self.move_up), ("Move Down", self.move_down),
             ("Open bronmap", self.open_source_folder),
             ("Open verwerkingsmap", self.open_processed_folder),
+            ("Open bestand", self.open_final_file),
+            ("Open map", self.open_final_folder),
         )
         self.buttons = {}
         for text, slot in specs:
@@ -162,6 +165,9 @@ class DownloadQueueDialog(QDialog):
                 if job.processed_sample_rate else "—",
                 job.processed_channels if job.processed_channels else "—",
                 f"{job.retry_count}/{job.max_retries}",
+                "Geschreven" if job.metadata_written else "—",
+                "Geschreven" if job.artwork_written else "—",
+                job.filename or "—", job.final_path or "—",
                 job.error_message or job.processing_warning or "",
             )
             for column, value in enumerate(values):
@@ -169,12 +175,12 @@ class DownloadQueueDialog(QDialog):
                 item.setData(256, job.job_id)
                 self.table.setItem(row, column, item)
         counts = {status: sum(job.status == status for job in jobs) for status in (
-            WAITING, RUNNING, DOWNLOADING, COMPLETED, PROCESSED, FAILED, CANCELLED,
+            WAITING, RUNNING, DOWNLOADING, COMPLETED, PROCESSED, RECOVERED, FAILED, CANCELLED,
         )}
         self.summary_label.setText(
             f"Totale queue: {len(jobs)} | Waiting: {counts[WAITING]} | "
             f"Running: {counts[RUNNING] + counts[DOWNLOADING]} | "
-            f"Completed: {counts[COMPLETED] + counts[PROCESSED]} | "
+            f"Completed: {counts[COMPLETED] + counts[PROCESSED] + counts[RECOVERED]} | "
             f"Failed: {counts[FAILED]} | "
             f"Cancelled: {counts[CANCELLED]}"
         )
@@ -284,6 +290,10 @@ class DownloadQueueDialog(QDialog):
             return "Valideren"
         if job.status in {"PROCESSED"}:
             return "Gereed"
+        if job.status == FINALIZING:
+            return "Finaliseren"
+        if job.status == RECOVERED:
+            return "Gereed"
         if job.status in {DOWNLOADING, PREPARING, QUEUED, RUNNING}:
             return "Downloaden"
         return "Wachten"
@@ -293,6 +303,15 @@ class DownloadQueueDialog(QDialog):
 
     def open_processed_folder(self):
         self._open_job_folder("processed_path")
+
+    def open_final_file(self):
+        job = self.manager.get(self.selected_job_id())
+        path = Path(job.final_path) if job and job.final_path else None
+        if path and path.is_file():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+    def open_final_folder(self):
+        self._open_job_folder("final_path")
 
     def _open_job_folder(self, attribute):
         job = self.manager.get(self.selected_job_id())

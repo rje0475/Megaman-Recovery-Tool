@@ -342,6 +342,13 @@ def maak_rapport(map_pad, database):
                 f"warning={job['processing_warning'] or '—'} | "
                 f"processingfout={job['processing_error_message'] or '—'} | "
                 f"bron_verwijderd={bool(job['source_removed'])} | "
+                f"eindlocatie={job['final_path'] or '—'} | "
+                f"bestandsnaam={job['filename'] or '—'} | "
+                f"eindgrootte={job['final_size'] or '—'} | "
+                f"tags={job['written_tags'] or '—'} | "
+                f"album_art={bool(job['artwork_written'])} | "
+                f"recovery_voltooid={job['finalization_status'] == 'RECOVERED'} | "
+                f"finalisatiefout={job['finalization_error_message'] or '—'} | "
                 f"fout={job['last_error'] or '—'}\n"
             )
         f.write("\n")

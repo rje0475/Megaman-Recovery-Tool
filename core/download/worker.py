@@ -15,6 +15,8 @@ from core.audio.models import AudioProcessingConfig, AudioProcessingProgress
 from core.audio.processor import AudioProcessor
 from core.audio.probe import AudioProbe
 from core.audio.validator import AudioValidator
+from core.metadata import MetadataConfig, MetadataFinalizer
+from core.metadata.errors import FinalizationSkipped, MetadataError
 from database import SQLiteDatabase
 
 
@@ -30,7 +32,8 @@ class DownloadQueueWorker(QObject):
 
     def __init__(
         self, database_path, temp_root, provider_factory=None,
-        audio_config=None, processor_factory=None, parent=None
+        audio_config=None, processor_factory=None, metadata_config=None,
+        finalizer_factory=None, parent=None
     ):
         super().__init__(parent)
         self.database_path = database_path
@@ -38,11 +41,14 @@ class DownloadQueueWorker(QObject):
         self.provider_factory = provider_factory or YtDlpDownloadProvider
         self.audio_config = audio_config or AudioProcessingConfig.from_environment()
         self.processor_factory = processor_factory
+        self.metadata_config = metadata_config or MetadataConfig.from_environment()
+        self.finalizer_factory = finalizer_factory
         self.processed_root = self.temp_root.parent / "processed"
         self._pause_requested = Event()
         self._stop_requested = Event()
         self._engine = None
         self._audio_processor = None
+        self._finalizer = None
         self.current_job_id = None
         self.setObjectName("DownloadQueueWorker")
 
@@ -62,14 +68,22 @@ class DownloadQueueWorker(QObject):
                 self.current_job_id = job.job_id
                 self.job_started.emit(job.job_id)
                 try:
-                    if not self._source_is_valid(job.download_path):
+                    if not self._source_is_valid(job.download_path) and not self._source_is_valid(job.processed_path):
                         provider = self.provider_factory()
                         self._engine = DownloadEngine(
                             manager, provider, self.temp_root, self.log_message.emit
                         )
                         self._engine.execute(job, self.job_progress.emit)
                         job = manager.get(job.job_id)
-                    self._process_audio(manager, job)
+                    if not self._source_is_valid(job.processed_path):
+                        self._process_audio(manager, job)
+                    job = manager.get(job.job_id)
+                    if self._can_finalize(database, job.recovery_item_id):
+                        self._finalize(manager, job, database)
+                    else:
+                        self.log_message.emit(
+                            "Finalisatie overgeslagen: geen opgeslagen Spotify-match."
+                        )
                 except DownloadCancelled:
                     self.job_cancelled.emit(job.job_id)
                 except FfmpegCancelledError as error:
@@ -85,6 +99,12 @@ class DownloadQueueWorker(QObject):
                             f"FFmpeg/ffprobe technische uitvoer:\n{error.stderr}"
                         )
                     self.job_failed.emit(job.job_id, error.code, str(error))
+                except FinalizationSkipped as error:
+                    manager.fail_finalization(job.job_id, error)
+                    self.job_failed.emit(job.job_id, error.code, str(error))
+                except MetadataError as error:
+                    manager.fail_finalization(job.job_id, error)
+                    self.job_failed.emit(job.job_id, error.code, str(error))
                 except DownloadError as error:
                     self.job_failed.emit(job.job_id, error.code, str(error))
                 else:
@@ -92,6 +112,7 @@ class DownloadQueueWorker(QObject):
                 finally:
                     self._engine = None
                     self._audio_processor = None
+                    self._finalizer = None
                     self.current_job_id = None
         except Exception as error:
             self.log_message.emit(traceback.format_exc())
@@ -187,3 +208,23 @@ class DownloadQueueWorker(QObject):
                 )
             else:
                 manager.mark_source_removed(job.job_id)
+
+    def _finalize(self, manager, job, database):
+        self._finalizer = (
+            self.finalizer_factory(database)
+            if self.finalizer_factory else
+            MetadataFinalizer(database, self.metadata_config)
+        )
+        manager.start_finalization(job.job_id)
+        result = self._finalizer.finalize(job)
+        manager.complete_finalization(job.job_id, result)
+
+    @staticmethod
+    def _can_finalize(database, recovery_item_id):
+        row = database.verbinding.execute(
+            """SELECT selected_spotify_candidate_id,selected_spotify_artist,
+            selected_spotify_title FROM recovery_items WHERE id=?""",
+            (recovery_item_id,),
+        ).fetchone()
+        return bool(row and row["selected_spotify_candidate_id"]
+                    and row["selected_spotify_artist"] and row["selected_spotify_title"])

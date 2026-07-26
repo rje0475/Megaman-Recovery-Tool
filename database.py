@@ -588,6 +588,16 @@ class SQLiteDatabase:
                 source_duration REAL,
                 source_format TEXT,
                 source_removed INTEGER NOT NULL DEFAULT 0,
+                final_path TEXT,
+                filename TEXT,
+                metadata_written INTEGER NOT NULL DEFAULT 0,
+                artwork_written INTEGER NOT NULL DEFAULT 0,
+                finalized_at TEXT,
+                finalization_status TEXT,
+                finalization_error_code TEXT,
+                finalization_error_message TEXT,
+                final_size INTEGER,
+                written_tags TEXT,
                 FOREIGN KEY (recovery_item_id) REFERENCES recovery_items(id)
                     ON DELETE CASCADE,
                 FOREIGN KEY (youtube_candidate_id) REFERENCES youtube_candidates(id)
@@ -625,6 +635,13 @@ class SQLiteDatabase:
             "source_duration": "REAL",
             "source_format": "TEXT",
             "source_removed": "INTEGER NOT NULL DEFAULT 0",
+            "final_path": "TEXT", "filename": "TEXT",
+            "metadata_written": "INTEGER NOT NULL DEFAULT 0",
+            "artwork_written": "INTEGER NOT NULL DEFAULT 0",
+            "finalized_at": "TEXT", "finalization_status": "TEXT",
+            "finalization_error_code": "TEXT",
+            "finalization_error_message": "TEXT", "final_size": "INTEGER",
+            "written_tags": "TEXT",
         }
         for kolom, kolomtype in download_queue_migraties.items():
             if kolom not in download_queue_kolommen:
