@@ -77,5 +77,5 @@ class WorkflowWorker(QObject):
 
     def resolve_review(self, accepted):
         """Thread-safe: alleen eenvoudige waarden plus threading.Event."""
-        self._review_result = bool(accepted)
+        self._review_result = accepted
         self._review_event.set()

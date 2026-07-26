@@ -174,6 +174,17 @@ een aangevinkt item met een concrete Spotify-URI telt als **Klaar voor
 playlist**. Continue waarschuwt wanneer aangevinkte items nog geen bruikbare
 match hebben.
 
+Na **Playlist voorbereiden** toont de GUI eerst een aparte bevestiging met de
+aantallen geselecteerd, gekoppeld, klaar voor playlist, zonder match en
+gedeselecteerd. De playlistnaam kan daar nog worden aangepast. Alleen de knop
+**Playlist maken** start de Spotify-mutatie; Terug en Annuleren maken niets.
+De synchronisatie gebruikt uitsluitend persistent gereviewde
+`selected_spotify_uri`-waarden van aangevinkte items, sorteert op
+jaar/week/chartpositie/bestandsnaam en dedupliceert op track-ID of URI. Een
+bestaande playlist-ID wordt hergebruikt. Het resultaatscherm toont de echte
+Spotify-URL, nieuwe en bestaande tracks, duplicaten, onvolledige keuzes en de
+syncstatus. Reviewkeuzes blijven bij API- of netwerkfouten behouden.
+
 Handmatige praktijktest:
 
 1. Haal de branch op met

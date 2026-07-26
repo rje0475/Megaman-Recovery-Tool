@@ -2,6 +2,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -15,7 +16,11 @@ from core.recovery_review import (
     versie_waarschuwingen,
 )
 from database import maak_database, verkrijg_of_maak_recovery_set
-from gui.recovery_review import RecoveryReviewDialog
+from gui.recovery_review import (
+    PlaylistConfirmationDialog,
+    PlaylistResultDialog,
+    RecoveryReviewDialog,
+)
 
 
 class RecoveryReviewTest(unittest.TestCase):
@@ -350,6 +355,7 @@ class RecoveryReviewTest(unittest.TestCase):
         dialog._vraag_onvolledige_selectie = lambda aantal: (
             "deselect" if aantal == 2 else "back"
         )
+        dialog._confirm_playlist = lambda counts: ("create", "Jaarcollectie")
         dialog._continue()
         controle = maak_database(self.path)
         try:
@@ -397,15 +403,22 @@ class RecoveryReviewTest(unittest.TestCase):
         }
         self.assertIn("release_date", candidate_columns)
 
-    def test_continue_slaat_op_zonder_playlistactie(self):
+    def test_playlist_voorbereiden_slaat_keuze_op_zonder_api_actie(self):
         dialog = RecoveryReviewDialog(
             self.set_id,
             "Jaarcollectie",
             database_factory=maak_database,
             database_path=self.path,
         )
-        dialog.table.item(0, 0).setCheckState(Qt.CheckState.Checked)
+        row = next(
+            row for row in range(dialog.table.rowCount())
+            if dialog._item_for_row(row).id == self.matched
+        )
+        dialog.table.item(row, 0).setCheckState(Qt.CheckState.Checked)
+        dialog._confirm_playlist = lambda counts: ("create", "Mijn playlist")
         dialog._continue()
+        self.assertTrue(dialog.playlist_requested)
+        self.assertEqual(dialog.prepared_playlist_name, "Mijn playlist")
         controle = maak_database(self.path)
         try:
             aantal = controle.verbinding.execute(
@@ -423,6 +436,70 @@ class RecoveryReviewTest(unittest.TestCase):
             self.assertIsNone(recovery_set["spotify_playlist_id"])
         finally:
             controle.sluit()
+
+    def test_annuleren_maakt_geen_playlist(self):
+        dialog = RecoveryReviewDialog(
+            self.set_id, "Jaarcollectie",
+            database_factory=maak_database, database_path=self.path,
+        )
+        row = next(
+            row for row in range(dialog.table.rowCount())
+            if dialog._item_for_row(row).id == self.matched
+        )
+        dialog.table.item(row, 0).setCheckState(Qt.CheckState.Checked)
+        dialog._confirm_playlist = lambda counts: ("cancel", "Jaarcollectie")
+        dialog._continue()
+        self.assertFalse(dialog.playlist_requested)
+        rij = self.db.verbinding.execute(
+            "SELECT spotify_playlist_id FROM recovery_sets WHERE id=?",
+            (self.set_id,),
+        ).fetchone()
+        self.assertIsNone(rij["spotify_playlist_id"])
+
+    def test_resultaatscherm_toont_en_opent_echte_urls(self):
+        summary = {
+            "playlist_name": "Jaarcollectie",
+            "unique_selected": 10,
+            "playlist_existing": 3,
+            "playlist_added": 7,
+            "duplicates_skipped": 2,
+            "unmatched_selected": 1,
+            "playlist_url": "https://open.spotify.com/playlist/echt-id",
+            "playlist_sync_status": "SUCCESS",
+        }
+        dialog = PlaylistResultDialog(
+            summary, self.path.parent / "rapport.txt"
+        )
+        try:
+            self.assertIn("Nieuw toegevoegd: 7", dialog.result_label.text())
+            with patch(
+                "gui.recovery_review.QDesktopServices.openUrl"
+            ) as openen:
+                dialog._open_playlist()
+            self.assertEqual(
+                openen.call_args.args[0].toString(),
+                "https://open.spotify.com/playlist/echt-id",
+            )
+        finally:
+            dialog.reject()
+
+    def test_bevestigingsdialoog_toont_tellingen_en_bewerkbare_naam(self):
+        counts = {
+            "total": 24, "selected": 20, "with_match": 18,
+            "ready": 17, "without_match": 3, "deselected": 4,
+        }
+        dialog = PlaylistConfirmationDialog(
+            counts, "Jaarcollectie"
+        )
+        try:
+            tekst = dialog.findChildren(type(dialog.name_field))[0]
+            self.assertEqual(tekst.text(), "Jaarcollectie")
+            dialog.name_field.setText("Mijn herstelplaylist")
+            dialog._finish("create")
+            self.assertEqual(dialog.action, "create")
+            self.assertEqual(dialog.playlist_name, "Mijn herstelplaylist")
+        finally:
+            dialog.reject()
 
 
 if __name__ == "__main__":

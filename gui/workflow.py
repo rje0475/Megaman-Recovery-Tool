@@ -11,7 +11,7 @@ from core.salvage_workflow import (
     ontdek_archive_sets,
     voer_salvage_workflow_uit,
 )
-from core.spotify import voer_spotify_search_uit
+from core.spotify import sync_playlist, voer_spotify_search_uit
 from core.spotify.client import SpotifyConfigurationError
 from core.spotify.search import definitieve_spotify_telling
 from database import (
@@ -196,7 +196,7 @@ class RecoveryGuiWorkflow:
         analyse=voer_analyse,
         salvage=voer_salvage_workflow_uit,
         spotify_search=voer_spotify_search_uit,
-        playlist_sync=None,
+        playlist_sync=sync_playlist,
         report=maak_rapport,
         database_factory=SQLiteDatabase,
         database_path=DATABASE_BESTAND,
@@ -232,6 +232,12 @@ class RecoveryGuiWorkflow:
             "playlist_existing": 0,
             "playlist_id": None,
             "playlist_name": "",
+            "playlist_url": None,
+            "unique_selected": 0,
+            "duplicates_skipped": 0,
+            "unmatched_selected": 0,
+            "playlist_sync_status": "NOT_REQUESTED",
+            "playlist_last_error": None,
             "report_path": "",
             "status": "mislukt",
         }
@@ -357,12 +363,15 @@ class RecoveryGuiWorkflow:
                     "Recovery Review geopend; "
                     "er wordt nog geen playlist gemaakt."
                 )
-                review_opgeslagen = callbacks.review_requested({
+                review_besluit = callbacks.review_requested({
                     **summary,
                     "recovery_set_id": search.recovery_set_id,
                     "recovery_set": setnaam,
                 })
-                if review_opgeslagen:
+                if (
+                    isinstance(review_besluit, dict)
+                    and review_besluit.get("accepted")
+                ):
                     callbacks.stage_completed("Recovery Review")
                     callbacks.log_message(
                         "Recovery Review opgeslagen."
@@ -372,14 +381,61 @@ class RecoveryGuiWorkflow:
                         "Recovery Review",
                         "Review gesloten zonder voortzetten.",
                     )
-            callbacks.stage_skipped(
-                "Playlist Sync",
-                "Wacht op een afgeronde Recovery Review; "
-                "er is geen playlist aangemaakt.",
-            )
-            callbacks.log_message(
-                "Playlist Sync uitgesteld tot na Recovery Review."
-            )
+            playlist_gevraagd = bool(
+                isinstance(review_besluit, dict)
+                and review_besluit.get("create_playlist")
+            ) if search is not None else False
+            if not playlist_gevraagd:
+                callbacks.stage_skipped(
+                    "Playlist Sync",
+                    "De gebruiker heeft Playlist maken niet bevestigd.",
+                )
+                callbacks.log_message(
+                    "Geen playlist gemaakt: expliciete bevestiging ontbreekt."
+                )
+            else:
+                callbacks.stage_started("Playlist Sync")
+                try:
+                    playlist = self.playlist_sync(
+                        database,
+                        recovery_set_id=search.recovery_set_id,
+                        playlist_name=review_besluit.get("playlist_name"),
+                        uitvoer=writer,
+                    )
+                except Exception as error:
+                    summary.update({
+                        "playlist_sync_status": "FAILED",
+                        "playlist_last_error": str(error),
+                    })
+                    callbacks.stage_failed("Playlist Sync", str(error))
+                    callbacks.log_message(f"Playlist Sync mislukt: {error}")
+                else:
+                    summary.update({
+                        "playlist_added": playlist.added,
+                        "playlist_existing": playlist.already_present,
+                        "playlist_id": playlist.playlist_id,
+                        "playlist_name": playlist.playlist_name,
+                        "playlist_url": playlist.playlist_url,
+                        "unique_selected": playlist.unique_selected,
+                        "duplicates_skipped": playlist.duplicates_skipped,
+                        "unmatched_selected": playlist.unmatched_selected,
+                        "playlist_sync_status": playlist.sync_status,
+                        "playlist_last_error": playlist.last_error,
+                    })
+                    callbacks.stage_progress(maak_progress(
+                        "Playlist Sync", 1, 1,
+                        f"Playlist-sync {playlist.sync_status.lower()}.",
+                    ))
+                    if playlist.sync_status == "FAILED":
+                        callbacks.stage_failed(
+                            "Playlist Sync",
+                            playlist.last_error or "Playlist-sync mislukt.",
+                        )
+                    else:
+                        callbacks.stage_completed("Playlist Sync")
+                    callbacks.log_message(
+                        f"Playlist bijgewerkt: {playlist.playlist_name}."
+                    )
             writer.flush()
             callbacks.stage_started("Rapport")
             rapportpad = self.report(source, database)

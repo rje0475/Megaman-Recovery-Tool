@@ -18,7 +18,10 @@ class SpotifyConfigurationError(RuntimeError):
 
 
 class SpotifyApiError(RuntimeError):
-    pass
+    def __init__(self, message, status_code=None, retry_after=None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.retry_after = retry_after
 
 
 class SpotifyClient:
@@ -201,8 +204,15 @@ class SpotifyClient:
             ) as response:
                 return json.load(response)
         except HTTPError as error:
+            retry_after = error.headers.get("Retry-After") if error.headers else None
+            try:
+                retry_after = float(retry_after) if retry_after else None
+            except (TypeError, ValueError):
+                retry_after = None
             raise SpotifyApiError(
-                f"Spotify API-fout {error.code}: {error.reason}"
+                f"Spotify API-fout {error.code}: {error.reason}",
+                status_code=error.code,
+                retry_after=retry_after,
             ) from error
         except URLError as error:
             raise SpotifyApiError(

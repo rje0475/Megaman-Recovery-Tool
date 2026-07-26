@@ -238,12 +238,14 @@ def autoriseer_spotify_gebruiker(
 def verkrijg_geldig_gebruikerstoken(
     environment=None, token_store=None, opener=urlopen,
     browser_open=webbrowser.open, callback_receiver=None,
-    timeout=DEFAULT_TIMEOUT, now=time.time,
+    timeout=DEFAULT_TIMEOUT, now=time.time, force_refresh=False,
 ):
     environment = os.environ if environment is None else environment
     store = token_store or SpotifyTokenStore(environment=environment)
     token = store.load()
     if (
+        not force_refresh
+        and
         token
         and token.get("access_token")
         and int(token.get("expires_at") or 0)

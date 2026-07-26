@@ -403,7 +403,11 @@ class MainWindowTest(unittest.TestCase):
         dialog.accept()
         QApplication.processEvents()
         self.assertFalse(self.venster.review_active)
-        self.assertEqual(resolved, [True])
+        self.assertEqual(resolved, [{
+            "accepted": True,
+            "create_playlist": False,
+            "playlist_name": None,
+        }])
 
     def test_worker_wacht_op_review_en_hervat_na_continue(self):
         dialog = QDialog(self.venster)

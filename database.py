@@ -272,6 +272,11 @@ class SQLiteDatabase:
         recovery_set_migraties = {
             "spotify_playlist_id": "TEXT",
             "spotify_playlist_name": "TEXT",
+            "spotify_playlist_url": "TEXT",
+            "spotify_playlist_track_count": "INTEGER NOT NULL DEFAULT 0",
+            "spotify_playlist_synced_at": "TEXT",
+            "spotify_playlist_sync_status": "TEXT",
+            "spotify_playlist_last_error": "TEXT",
         }
         for kolom, kolomtype in recovery_set_migraties.items():
             if kolom not in recovery_set_kolommen:

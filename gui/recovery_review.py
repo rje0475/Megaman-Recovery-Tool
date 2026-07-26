@@ -58,6 +58,88 @@ FILTERS = (
 )
 
 
+class PlaylistConfirmationDialog(QDialog):
+    def __init__(self, counts, default_name, parent=None):
+        super().__init__(parent)
+        self.action = "back"
+        self.setWindowTitle("Playlist voorbereiden")
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel(
+            f"Totaal recovery-items: {counts['total']}\n"
+            f"Aangevinkte items: {counts['selected']}\n"
+            f"Items met gekozen Spotify-match: {counts['with_match']}\n"
+            f"Items klaar voor playlist: {counts['ready']}\n"
+            f"Items zonder gekozen match: {counts['without_match']}\n"
+            f"Gedeselecteerde items: {counts['deselected']}"
+        ))
+        layout.addWidget(QLabel("Playlistnaam:"))
+        self.name_field = QLineEdit(default_name)
+        layout.addWidget(self.name_field)
+        buttons = QHBoxLayout()
+        terug = QPushButton("Terug naar review")
+        maken = QPushButton("Playlist maken")
+        annuleren = QPushButton("Annuleren")
+        terug.clicked.connect(lambda: self._finish("back"))
+        maken.clicked.connect(lambda: self._finish("create"))
+        annuleren.clicked.connect(lambda: self._finish("cancel"))
+        buttons.addWidget(terug)
+        buttons.addStretch(1)
+        buttons.addWidget(maken)
+        buttons.addWidget(annuleren)
+        layout.addLayout(buttons)
+
+    @property
+    def playlist_name(self):
+        return self.name_field.text().strip()
+
+    def _finish(self, action):
+        if action == "create" and not self.playlist_name:
+            QMessageBox.warning(self, "Playlist", "Geef een playlistnaam op.")
+            return
+        self.action = action
+        self.accept() if action == "create" else self.reject()
+
+
+class PlaylistResultDialog(QDialog):
+    def __init__(self, summary, report_path=None, parent=None):
+        super().__init__(parent)
+        self.summary = summary
+        self.report_path = report_path
+        self.setWindowTitle("Spotify-playlistresultaat")
+        layout = QVBoxLayout(self)
+        self.result_label = QLabel(
+            f"Playlistnaam: {summary.get('playlist_name') or '—'}\n"
+            f"Unieke geselecteerde tracks: {summary.get('unique_selected', 0)}\n"
+            f"Reeds aanwezig: {summary.get('playlist_existing', 0)}\n"
+            f"Nieuw toegevoegd: {summary.get('playlist_added', 0)}\n"
+            f"Duplicaten overgeslagen: {summary.get('duplicates_skipped', 0)}\n"
+            f"Items zonder match: {summary.get('unmatched_selected', 0)}\n"
+            f"Playlist-URL: {summary.get('playlist_url') or '—'}\n"
+            f"Syncstatus: {summary.get('playlist_sync_status') or '—'}"
+        )
+        layout.addWidget(self.result_label)
+        buttons = QHBoxLayout()
+        self.open_playlist_button = QPushButton("Playlist openen")
+        self.open_playlist_button.setEnabled(bool(summary.get("playlist_url")))
+        self.open_playlist_button.clicked.connect(self._open_playlist)
+        self.open_report_button = QPushButton("Rapport openen")
+        self.open_report_button.setEnabled(bool(report_path))
+        self.open_report_button.clicked.connect(self._open_report)
+        terug = QPushButton("Terug naar hoofdscherm")
+        terug.clicked.connect(self.accept)
+        buttons.addWidget(self.open_playlist_button)
+        buttons.addWidget(self.open_report_button)
+        buttons.addStretch(1)
+        buttons.addWidget(terug)
+        layout.addLayout(buttons)
+
+    def _open_playlist(self):
+        QDesktopServices.openUrl(QUrl(self.summary["playlist_url"]))
+
+    def _open_report(self):
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.report_path)))
+
+
 class SorteerItem(QTableWidgetItem):
     def __init__(self, waarde=None, tekst=None):
         super().__init__(
@@ -98,6 +180,8 @@ class RecoveryReviewDialog(QDialog):
         self._retired_candidate_widgets = []
         self._network = QNetworkAccessManager(self)
         self._building_table = False
+        self.playlist_requested = False
+        self.prepared_playlist_name = recovery_set_name
         self.setWindowTitle(f"Recovery Review — {recovery_set_name}")
         self.resize(1360, 800)
         self.setModal(True)
@@ -201,7 +285,7 @@ class RecoveryReviewDialog(QDialog):
 
         onder = QHBoxLayout()
         self.back_button = QPushButton("Back")
-        self.continue_button = QPushButton("Continue")
+        self.continue_button = QPushButton("Playlist voorbereiden")
         self.cancel_button = QPushButton("Cancel")
         self.continue_button.setEnabled(False)
         self.back_button.clicked.connect(self._back)
@@ -632,7 +716,43 @@ class RecoveryReviewDialog(QDialog):
                 self, "Recovery Review", f"Review opslaan mislukt: {error}"
             )
             return
+        counts = self._playlist_counts()
+        action, playlist_name = self._confirm_playlist(counts)
+        if action == "back":
+            return
+        if action == "cancel":
+            self.reject()
+            return
+        self.playlist_requested = True
+        self.prepared_playlist_name = playlist_name
         self.accept()
+
+    def _confirm_playlist(self, counts):
+        bevestiging = PlaylistConfirmationDialog(
+            counts, self.recovery_set_name, self
+        )
+        bevestiging.exec()
+        return bevestiging.action, bevestiging.playlist_name
+
+    def _playlist_counts(self):
+        selected = self._selected_ids()
+        with_match = sum(
+            self._candidate_for(item.id) is not None for item in self.items
+        )
+        ready = sum(
+            item.id in selected
+            and (candidate := self._candidate_for(item.id)) is not None
+            and bool(candidate.spotify_uri)
+            for item in self.items
+        )
+        return {
+            "total": len(self.items),
+            "selected": len(selected),
+            "with_match": with_match,
+            "ready": ready,
+            "without_match": len(selected) - ready,
+            "deselected": len(self.items) - len(selected),
+        }
 
     def _back(self):
         self.done(2)

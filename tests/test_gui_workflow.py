@@ -21,7 +21,7 @@ from gui.workflow import (
 
 
 class EventRecorder:
-    def __init__(self):
+    def __init__(self, review_decision=None):
         self.started = []
         self.progress = []
         self.completed = []
@@ -29,6 +29,11 @@ class EventRecorder:
         self.failed = []
         self.logs = []
         self.reviews = []
+        self.review_decision = review_decision or {
+            "accepted": True,
+            "create_playlist": False,
+            "playlist_name": "Megaman2007",
+        }
 
     def callbacks(self):
         return WorkflowCallbacks(
@@ -39,7 +44,7 @@ class EventRecorder:
             stage_failed=lambda *args: self.failed.append(args),
             log_message=self.logs.append,
             review_requested=lambda summary: (
-                self.reviews.append(summary) or True
+                self.reviews.append(summary) or self.review_decision
             ),
         )
 
@@ -177,8 +182,7 @@ class GuiWorkflowAdapterTest(unittest.TestCase):
         self.assertIn(
             (
                 "Playlist Sync",
-                "Wacht op een afgeronde Recovery Review; "
-                "er is geen playlist aangemaakt.",
+                "De gebruiker heeft Playlist maken niet bevestigd.",
             ),
             events.skipped,
         )
@@ -211,6 +215,40 @@ class GuiWorkflowAdapterTest(unittest.TestCase):
             stage == "Playlist Sync" for stage, _ in events.skipped
         ))
         self.assertIsNone(summary["playlist_id"])
+
+    def test_playlist_start_uitsluitend_na_expliciete_bevestiging(self):
+        calls = []
+
+        def search(*args, **kwargs):
+            return SimpleNamespace(recovery_set_id=self.set_id, total=1)
+
+        playlist_result = SimpleNamespace(
+            added=1, already_present=0, playlist_id="playlist-id",
+            playlist_name="Mijn herstel", playlist_url=
+            "https://open.spotify.com/playlist/playlist-id",
+            unique_selected=1, duplicates_skipped=0,
+            unmatched_selected=0, sync_status="SUCCESS", last_error=None,
+        )
+        workflow = RecoveryGuiWorkflow(
+            analyse=self._analyse, salvage=self._salvage,
+            spotify_search=search,
+            playlist_sync=lambda *args, **kwargs: (
+                calls.append(kwargs) or playlist_result
+            ),
+            report=lambda *args: self.root / "rapport.txt",
+            database_factory=maak_database,
+            database_path=self.database_path,
+        )
+        events = EventRecorder(review_decision={
+            "accepted": True, "create_playlist": True,
+            "playlist_name": "Mijn herstel",
+        })
+        summary = workflow.run(self.root, events.callbacks())
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["recovery_set_id"], self.set_id)
+        self.assertEqual(calls[0]["playlist_name"], "Mijn herstel")
+        self.assertEqual(summary["playlist_id"], "playlist-id")
+        self.assertEqual(summary["playlist_sync_status"], "SUCCESS")
 
 
 class RecoverySetNaamTest(unittest.TestCase):

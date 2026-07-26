@@ -76,3 +76,9 @@ class SpotifyPlaylistSummary:
     skipped_low_confidence: int
     skipped_not_found: int
     skipped_manual_review: int
+    playlist_url: str | None = None
+    unique_selected: int = 0
+    duplicates_skipped: int = 0
+    unmatched_selected: int = 0
+    sync_status: str = "SUCCESS"
+    last_error: str | None = None

@@ -4,7 +4,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QElapsedTimer, QThread, QUrl, Qt
+from PySide6.QtCore import QCoreApplication, QElapsedTimer, QThread, QUrl, Qt
 from PySide6.QtGui import QCloseEvent, QDesktopServices, QTextCursor
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -27,7 +27,7 @@ from gui.workflow import (
     WORKFLOW_STAGES,
     bepaal_recovery_setnaam,
 )
-from gui.recovery_review import RecoveryReviewDialog
+from gui.recovery_review import PlaylistResultDialog, RecoveryReviewDialog
 from gui.workers import WorkflowWorker
 
 
@@ -61,6 +61,7 @@ class MegamanMainWindow(QMainWindow):
         thread_factory=QThread,
         set_name_resolver=bepaal_recovery_setnaam,
         review_factory=RecoveryReviewDialog,
+        result_factory=PlaylistResultDialog,
     ):
         super().__init__()
         self.workflow_factory = workflow_factory
@@ -68,6 +69,7 @@ class MegamanMainWindow(QMainWindow):
         self.thread_factory = thread_factory
         self.set_name_resolver = set_name_resolver
         self.review_factory = review_factory
+        self.result_factory = result_factory
         self.workflow_thread = None
         self.workflow_worker = None
         self.workflow_running = False
@@ -75,7 +77,9 @@ class MegamanMainWindow(QMainWindow):
         self._worker_done = False
         self._thread_done = False
         self.playlist_id = None
+        self.playlist_url = None
         self.review_dialog = None
+        self.result_dialog = None
         self.review_active = False
         self._last_summary = None
         self._last_log = None
@@ -222,6 +226,15 @@ class MegamanMainWindow(QMainWindow):
         return bron.resolve()
 
     def _thread_actief(self):
+        if (
+            self.workflow_running
+            and self.workflow_thread is not None
+            and self.workflow_thread.isFinished()
+        ):
+            # Lever eerst alle reeds gequeue-de stage/resultaatsignalen af.
+            QCoreApplication.processEvents()
+            if not self._thread_done:
+                self._thread_finished()
         return self.workflow_running or self.review_active
 
     def _start_workflow(self):
@@ -265,7 +278,9 @@ class MegamanMainWindow(QMainWindow):
         worker.workflow_failed.connect(self._workflow_failed)
         worker.review_requested.connect(self._open_recovery_review)
         worker.finished.connect(self._worker_finished)
-        worker.finished.connect(thread.quit)
+        worker.finished.connect(
+            thread.quit, Qt.ConnectionType.DirectConnection
+        )
         worker.finished.connect(worker.deleteLater)
         thread.finished.connect(self._thread_finished)
         thread.finished.connect(thread.deleteLater)
@@ -273,6 +288,7 @@ class MegamanMainWindow(QMainWindow):
 
     def _reset_workflow(self):
         self.playlist_id = None
+        self.playlist_url = None
         self._last_summary = None
         self.playlist_knop.setEnabled(False)
         self.voortgang.setValue(0)
@@ -402,6 +418,7 @@ class MegamanMainWindow(QMainWindow):
         setnaam = summary.get("recovery_set") or "Onbekend"
         self.recovery_set_label.setText(setnaam)
         self.playlist_id = summary.get("playlist_id")
+        self.playlist_url = summary.get("playlist_url")
         self.playlist_knop.setEnabled(bool(self.playlist_id))
         self.eindoverzicht.setText(
             f"Recovery-set: {setnaam}\n"
@@ -422,6 +439,13 @@ class MegamanMainWindow(QMainWindow):
             f"Playlist: {summary.get('playlist_name') or 'niet beschikbaar'}"
             f"\nRapport: {summary.get('report_path') or 'niet beschikbaar'}"
         )
+        if summary.get("playlist_sync_status") in {
+            "SUCCESS", "PARTIAL", "FAILED"
+        }:
+            self.result_dialog = self.result_factory(
+                summary, summary.get("report_path"), self
+            )
+            self.result_dialog.show()
     def _open_recovery_review(self, summary):
         self.review_active = True
         self.start_knop.setEnabled(False)
@@ -458,6 +482,18 @@ class MegamanMainWindow(QMainWindow):
     def _review_finished(self, result):
         self.review_active = False
         accepted = result == QDialog.DialogCode.Accepted
+        dialog = self.review_dialog
+        besluit = {
+            "accepted": accepted,
+            "create_playlist": bool(
+                accepted and dialog
+                and getattr(dialog, "playlist_requested", False)
+            ),
+            "playlist_name": (
+                getattr(dialog, "prepared_playlist_name", None)
+                if dialog else None
+            ),
+        }
         try:
             if accepted:
                 self.statusregel.setText(
@@ -482,7 +518,7 @@ class MegamanMainWindow(QMainWindow):
             self.review_dialog = None
         finally:
             if self.workflow_worker is not None:
-                self.workflow_worker.resolve_review(accepted)
+                self.workflow_worker.resolve_review(besluit)
 
     def _workflow_failed(self, error):
         for stage, label in self.stage_labels.items():
@@ -513,7 +549,10 @@ class MegamanMainWindow(QMainWindow):
         self._maybe_finalize_thread()
 
     def _maybe_finalize_thread(self):
-        if not (self._worker_done and self._thread_done):
+        # thread.finished is de definitieve lifecyclegrens. De worker kan pas
+        # stoppen nadat finished is uitgezonden; wachten op twee afzonderlijk
+        # gequeue-de GUI-slots introduceert alleen een race bij eventdrukte.
+        if not self._thread_done:
             return
         self.workflow_running = False
         self.start_knop.setEnabled(not self.review_active)
@@ -522,7 +561,7 @@ class MegamanMainWindow(QMainWindow):
             self.statusregel.setText("Workflow beëindigd.")
 
     def _open_playlist(self):
-        url = spotify_playlist_url(self.playlist_id)
+        url = self.playlist_url or spotify_playlist_url(self.playlist_id)
         if url:
             QDesktopServices.openUrl(QUrl(url))
 
