@@ -29,6 +29,7 @@ from gui.workflow import (
 )
 from gui.recovery_review import PlaylistResultDialog, RecoveryReviewDialog
 from gui.workers import WorkflowWorker
+from gui.settings_dialog import SettingsDialog
 
 
 STAGE_SYMBOLS = {
@@ -88,7 +89,15 @@ class MegamanMainWindow(QMainWindow):
         self.setWindowTitle("Megaman Recovery Tool")
         self.resize(860, 720)
         self._bouw_interface()
+        self._bouw_menu()
         self._reset_workflow()
+
+    def _bouw_menu(self):
+        action = self.menuBar().addAction("Settings")
+        action.triggered.connect(self._open_settings)
+
+    def _open_settings(self):
+        SettingsDialog(self).exec()
 
     def _bouw_interface(self):
         centraal = QWidget()

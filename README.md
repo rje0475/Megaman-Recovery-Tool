@@ -474,3 +474,33 @@ Ook `{track} - {artist} - {title}` en
 `{year}-{week} - {artist} - {title}` worden ondersteund. Na een succesvolle
 ID3/APIC-controle krijgt de job `RECOVERED` en wordt het recovery-item als
 geplaatst en verwerkt gemarkeerd.
+
+## Application Settings (fase 7)
+
+Alle runtime-instellingen worden centraal beheerd door `SettingsManager` en
+versioned opgeslagen in `config/settings.json`. Het bestand wordt automatisch
+aangemaakt, atomisch bijgewerkt en bij nieuwe versies niet-destructief
+gemigreerd. Bestaande environmentvariabelen blijven als compatibele override
+werken; tokens blijven in de bestaande beveiligde tokencache.
+
+Open in de GUI het menu **Settings**. De tabs General, Spotify, YouTube,
+Downloads, Audio en Metadata valideren wijzigingen direct. Diagnostics toont
+Python, SQLite, Mutagen, yt-dlp, FFmpeg/ffprobe en de configuratiestatus van
+Spotify en YouTube.
+
+**Export Settings** exporteert uitsluitend niet-geheime instellingen. Spotify
+tokens, Spotify client secret, YouTube API-key en caches worden niet
+meegenomen. **Import Settings** migreert oudere versies en behoudt lokaal
+aanwezige secrets. **Reset to Defaults** herstelt de ingebouwde defaults.
+
+```json
+{
+  "version": 1,
+  "general": {},
+  "spotify": {},
+  "youtube": {},
+  "download": {},
+  "audio": {},
+  "metadata": {}
+}
+```

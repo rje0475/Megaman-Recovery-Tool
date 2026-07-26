@@ -27,6 +27,8 @@ def bouw_zoekopdrachten(artist, title, version=None, original_filename=None):
 def zoek_youtube_kandidaten(
     database, recovery_item_id, provider=None, search_again=False
 ):
+    from core.settings import get_settings_manager
+    youtube_settings = get_settings_manager().section("youtube")
     provider = provider or YouTubeSearchProvider.from_environment()
     row = database.verbinding.execute(
         "SELECT * FROM recovery_items WHERE id=?", (int(recovery_item_id),)
@@ -46,8 +48,13 @@ def zoek_youtube_kandidaten(
     found = {}
     try:
         for query in queries:
-            for video in provider.search(query, limit=10):
-                score = score_video(artist, title, version, expected_duration, video)
+            for video in provider.search(
+                query, limit=getattr(provider, "default_limit", 10)
+            ):
+                score = score_video(
+                    artist, title, version, expected_duration, video,
+                    bool(youtube_settings["prefer_official_channels"]),
+                )
                 existing = found.get(video.video_id)
                 if existing is None or score.confidence > existing.score.confidence:
                     found[video.video_id] = YouTubeCandidate(None, video, score)
@@ -58,7 +65,9 @@ def zoek_youtube_kandidaten(
         )
         database.verbinding.commit()
         raise
-    ranked = sorted(found.values(), key=lambda c: c.score.confidence, reverse=True)[:10]
+    ranked = sorted(found.values(), key=lambda c: c.score.confidence, reverse=True)[
+        :int(youtube_settings["max_candidates"])
+    ]
     now = datetime.now().isoformat(timespec="seconds")
     for rank, candidate in enumerate(ranked, 1):
         v, s = candidate.video, candidate.score

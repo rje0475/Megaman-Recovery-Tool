@@ -15,7 +15,7 @@ class MetadataFinalizer:
     def __init__(self, database, config, writer=None, artwork_cache=None):
         self.database = database
         self.config = config
-        self.writer = writer or MetadataWriter()
+        self.writer = writer or MetadataWriter(config)
         self.artwork_cache = artwork_cache or ArtworkCache(config.artwork_cache)
 
     def resolve_metadata(self, recovery_item_id):
@@ -59,15 +59,17 @@ class MetadataFinalizer:
         staging = folder / f".{target.name}.{uuid.uuid4().hex}.tmp"
         try:
             shutil.copy2(source, staging)
-            artwork_path = self.artwork_cache.get(metadata.cover_url)
-            self.writer.write(staging, metadata, artwork_path.read_bytes())
+            artwork = (self.artwork_cache.get(metadata.cover_url).read_bytes()
+                       if self.config.write_artwork else b"")
+            self.writer.write(staging, metadata, artwork)
             tags = self.writer.validate(staging)
             if staging.stat().st_size <= 0:
                 raise FinalizationValidationError("Het gefinaliseerde bestand is leeg.")
             staging.replace(target)
             self.writer.validate(target)
             source.unlink()
-            return FinalizationResult(target, target.name, target.stat().st_size, True, True, tags, True)
+            return FinalizationResult(target, target.name, target.stat().st_size,
+                                      True, self.config.write_artwork, tags, True)
         except MetadataError:
             staging.unlink(missing_ok=True)
             raise

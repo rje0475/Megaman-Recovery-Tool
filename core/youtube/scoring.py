@@ -40,7 +40,8 @@ def _similarity(a, b):
     return SequenceMatcher(None, a, b).ratio()
 
 
-def score_video(artist, title, version, expected_duration, video):
+def score_video(artist, title, version, expected_duration, video,
+                prefer_official_channels=True):
     candidate = normaliseer_zoektekst(video.title)
     artist_score = _similarity(artist, candidate)
     title_score = _similarity(title, candidate)
@@ -68,7 +69,9 @@ def score_video(artist, title, version, expected_duration, video):
         warnings.append("Geen duur beschikbaar")
     channel = normaliseer_zoektekst(video.channel_name)
     channel_score = .5
-    if "topic" in channel or "official" in channel or _similarity(artist, channel) >= .8:
+    if _similarity(artist, channel) >= .8 or (
+        prefer_official_channels and ("topic" in channel or "official" in channel)
+    ):
         channel_score = 1.0
     penalty = min(.6, len(set(warnings)) * .10)
     total = (

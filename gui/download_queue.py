@@ -15,6 +15,7 @@ from core.download_queue import (
     PROCESSED, QUEUED, RECOVERED, RUNNING, WAITING, DownloadQueueManager,
 )
 from database import DATABASE_BESTAND, SQLiteDatabase
+from core.settings import get_settings_manager
 
 
 class DownloadQueueSimulator(QObject):
@@ -76,7 +77,8 @@ class DownloadQueueDialog(QDialog):
         self.database = database_factory(database_path)
         self.database_path = database_path
         self.worker_factory = worker_factory
-        self.temp_root = Path(temp_root or Path.cwd() / "downloads" / "temp")
+        configured = get_settings_manager().section("download")["download_dir"]
+        self.temp_root = Path(temp_root or configured)
         self.logs = []
         self.manager = DownloadQueueManager(self.database, self._log)
         self.simulator = DownloadQueueSimulator(

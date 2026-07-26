@@ -27,3 +27,8 @@ Desktop.ini
 
 # Logs
 *.log
+
+# Lokale applicatie-instellingen en secrets
+config/settings.json
+downloads/
+Recovered/

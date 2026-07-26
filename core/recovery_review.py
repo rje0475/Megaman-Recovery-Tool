@@ -236,10 +236,17 @@ def stel_playlist_selectie_in(database, recovery_item_id, selected):
 
 
 def _mag_automatisch_selecteren(rij, kandidaten, origineel):
+    from core.settings import get_settings_manager
+    spotify_settings = get_settings_manager().section("spotify")
+    if not spotify_settings["auto_select_high_confidence"]:
+        return False
     if rij["spotify_status"] != "MATCHED" or not kandidaten:
         return False
     beste = kandidaten[0]
-    if beste.confidence < MATCH_THRESHOLD:
+    threshold = float(spotify_settings["confidence_threshold"])
+    if threshold > 1:
+        threshold /= 100
+    if beste.confidence < threshold:
         return False
     if beste.version_warnings:
         return False

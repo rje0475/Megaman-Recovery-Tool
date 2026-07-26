@@ -44,16 +44,15 @@ class SpotifyClient:
     def from_environment(
         cls, environment=None, access_token=None, **kwargs
     ):
-        environment = os.environ if environment is None else environment
+        from core.settings import SettingsManager, get_settings_manager
+        manager = (get_settings_manager() if environment is None else
+                   SettingsManager(path=os.devnull, environment=environment, create=False))
+        settings = manager.section("spotify")
         return cls(
             SpotifyConfig(
-                environment.get("SPOTIFY_CLIENT_ID", ""),
-                environment.get("SPOTIFY_CLIENT_SECRET", ""),
-                environment.get("SPOTIFY_MARKET", "NL"),
-                access_token=(
-                    access_token
-                    or environment.get("SPOTIFY_ACCESS_TOKEN")
-                ),
+                settings["client_id"], settings["client_secret"],
+                settings["market"], access_token=(access_token or
+                    ((environment or {}).get("SPOTIFY_ACCESS_TOKEN") if environment is not None else None)),
             ),
             **kwargs,
         )

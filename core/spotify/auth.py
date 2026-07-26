@@ -71,13 +71,22 @@ class SpotifyTokenStore:
 
 
 def _configuratie(environment):
-    client_id = environment.get("SPOTIFY_CLIENT_ID", "").strip()
-    client_secret = environment.get("SPOTIFY_CLIENT_SECRET", "").strip()
+    from core.settings import SettingsManager
+    settings = SettingsManager(path=Path(os.devnull), environment=environment, create=False).section("spotify")
+    client_id = settings["client_id"].strip()
+    client_secret = settings["client_secret"].strip()
     if not client_id or not client_secret:
         raise SpotifyUserAuthorizationError(
             "SPOTIFY_CLIENT_ID en SPOTIFY_CLIENT_SECRET zijn verplicht."
         )
     return client_id, client_secret
+
+
+def _redirect_uri(environment):
+    from core.settings import SettingsManager
+    return SettingsManager(
+        path=Path(os.devnull), environment=environment, create=False
+    ).section("spotify")["redirect_uri"]
 
 
 def _token_request(opener, client_id, client_secret, parameters):
@@ -198,12 +207,13 @@ def autoriseer_spotify_gebruiker(
 ):
     environment = os.environ if environment is None else environment
     client_id, client_secret = _configuratie(environment)
+    redirect_uri = _redirect_uri(environment)
     store = token_store or SpotifyTokenStore(environment=environment)
     state = state_factory(32)
     authorization_url = f"{AUTHORIZE_URL}?{urlencode({
         'client_id': client_id,
         'response_type': 'code',
-        'redirect_uri': REDIRECT_URI,
+        'redirect_uri': redirect_uri,
         'scope': ' '.join(SCOPES),
         'state': state,
     })}"
@@ -227,7 +237,7 @@ def autoriseer_spotify_gebruiker(
         opener, client_id, client_secret, {
             "grant_type": "authorization_code",
             "code": callback["code"],
-            "redirect_uri": REDIRECT_URI,
+            "redirect_uri": redirect_uri,
         },
     )
     token = _normaliseer_token(data, now=now)

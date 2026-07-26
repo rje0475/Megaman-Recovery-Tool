@@ -17,9 +17,12 @@ class AudioProcessingConfig:
 
     @classmethod
     def from_environment(cls, environment=None, which=shutil.which):
-        environment = os.environ if environment is None else environment
-        ffmpeg = environment.get("FFMPEG_PATH") or which("ffmpeg")
-        ffprobe = environment.get("FFPROBE_PATH") or which("ffprobe")
+        from core.settings import SettingsManager, get_settings_manager
+        manager = (get_settings_manager() if environment is None else
+                   SettingsManager(path=Path(os.devnull), environment=environment, create=False))
+        values = manager.section("audio")
+        ffmpeg = values["ffmpeg_path"] or which("ffmpeg")
+        ffprobe = values["ffprobe_path"] or which("ffprobe")
         if not ffmpeg:
             try:
                 from scanner import FFMPEG
@@ -29,16 +32,15 @@ class AudioProcessingConfig:
         if not ffprobe and ffmpeg:
             sibling = Path(ffmpeg).with_name("ffprobe.exe" if os.name == "nt" else "ffprobe")
             ffprobe = sibling if sibling.is_file() else None
-        keep = str(environment.get("KEEP_SOURCE_AFTER_PROCESSING", "true")).casefold()
+        keep = values["keep_source"]
         return cls(
             ffmpeg_path=Path(ffmpeg) if ffmpeg else None,
             ffprobe_path=Path(ffprobe) if ffprobe else None,
-            output_audio_format=environment.get("OUTPUT_AUDIO_FORMAT", "mp3"),
-            mp3_bitrate_kbps=int(environment.get("MP3_BITRATE_KBPS", "320")),
-            processing_timeout_seconds=int(
-                environment.get("PROCESSING_TIMEOUT_SECONDS", "1800")
-            ),
-            keep_source_after_processing=keep not in {"0", "false", "no"},
+            output_audio_format=values["output_format"],
+            mp3_bitrate_kbps=int(values["bitrate_kbps"]),
+            processing_timeout_seconds=int(values["processing_timeout_seconds"]),
+            keep_source_after_processing=(keep if isinstance(keep, bool)
+                                          else str(keep).casefold() not in {"0", "false", "no"}),
         )
 
 

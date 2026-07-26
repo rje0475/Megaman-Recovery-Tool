@@ -18,6 +18,7 @@ from core.audio.validator import AudioValidator
 from core.metadata import MetadataConfig, MetadataFinalizer
 from core.metadata.errors import FinalizationSkipped, MetadataError
 from database import SQLiteDatabase
+from core.settings import get_settings_manager
 
 
 class DownloadQueueWorker(QObject):
@@ -37,13 +38,15 @@ class DownloadQueueWorker(QObject):
     ):
         super().__init__(parent)
         self.database_path = database_path
-        self.temp_root = Path(temp_root)
+        settings = get_settings_manager()
+        self.temp_root = Path(temp_root or settings.section("download")["download_dir"])
         self.provider_factory = provider_factory or YtDlpDownloadProvider
         self.audio_config = audio_config or AudioProcessingConfig.from_environment()
         self.processor_factory = processor_factory
         self.metadata_config = metadata_config or MetadataConfig.from_environment()
         self.finalizer_factory = finalizer_factory
-        self.processed_root = self.temp_root.parent / "processed"
+        self.processed_root = (Path(settings.section("download")["processed_dir"])
+                               if temp_root is None else self.temp_root.parent / "processed")
         self._pause_requested = Event()
         self._stop_requested = Event()
         self._engine = None

@@ -104,6 +104,15 @@ def maak_of_open_playlist(
             )
             return playlist, False
 
+    if playlist_name is None:
+        from core.settings import get_settings_manager
+        template = get_settings_manager().section("spotify")["playlist_name_template"]
+        try:
+            playlist_name = template.format(
+                recovery_set=recovery_set["archive_set_name"]
+            )
+        except (KeyError, ValueError):
+            playlist_name = recovery_set["archive_set_name"]
     naam = str(playlist_name or recovery_set["archive_set_name"]).strip()
     if not naam:
         naam = recovery_set["archive_set_name"]

@@ -42,7 +42,8 @@ def _duration_seconds(value):
 class YouTubeSearchProvider:
     """Zoekt zonder scraping via de officiële YouTube Data API."""
 
-    def __init__(self, api_key, opener=urlopen, api_url=API_URL, timeout=15):
+    def __init__(self, api_key, opener=urlopen, api_url=API_URL, timeout=15,
+                 default_limit=10):
         if not str(api_key or "").strip():
             raise YouTubeConfigurationError(
                 "YOUTUBE_API_KEY ontbreekt; configureer de officiële YouTube API-sleutel."
@@ -51,17 +52,24 @@ class YouTubeSearchProvider:
         self.opener = opener
         self.api_url = api_url.rstrip("/")
         self.timeout = timeout
+        self.default_limit = max(1, min(int(default_limit), 10))
 
     @classmethod
     def from_environment(cls, environment=None, **kwargs):
-        environment = os.environ if environment is None else environment
-        return cls(environment.get("YOUTUBE_API_KEY"), **kwargs)
+        from core.settings import SettingsManager, get_settings_manager
+        manager = (get_settings_manager() if environment is None else
+                   SettingsManager(path=os.devnull, environment=environment, create=False))
+        settings = manager.section("youtube")
+        kwargs.setdefault("timeout", 15)
+        kwargs.setdefault("default_limit", settings["max_candidates"])
+        return cls(settings["api_key"], **kwargs)
 
     @staticmethod
     def build_watch_url(video_id):
         return f"https://www.youtube.com/watch?v={video_id}"
 
-    def search(self, query, limit=10):
+    def search(self, query, limit=None):
+        limit = self.default_limit if limit is None else limit
         limit = max(1, min(int(limit), 10))
         data = self._get("search", {
             "part": "snippet", "type": "video", "q": query,

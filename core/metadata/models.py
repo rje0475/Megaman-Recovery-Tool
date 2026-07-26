@@ -13,17 +13,31 @@ class MetadataConfig:
     collision_policy: str = "Rename"
     max_path_length: int = 240
     artwork_cache: Path = Path("downloads/artwork_cache")
+    write_genre: bool = True
+    write_artwork: bool = True
+    write_comments: bool = True
+    write_track_number: bool = True
+    write_year: bool = True
 
     @classmethod
     def from_environment(cls, environment=None):
-        env = os.environ if environment is None else environment
+        from core.settings import SettingsManager, get_settings_manager
+        manager = (get_settings_manager() if environment is None else
+                   SettingsManager(path=Path(os.devnull), environment=environment, create=False))
+        metadata = manager.section("metadata")
+        download = manager.section("download")
         return cls(
-            output_root=Path(env.get("OUTPUT_ROOT", "Recovered")),
-            filename_template=env.get("FILENAME_TEMPLATE", "{artist} - {title}.mp3"),
-            folder_template=env.get("FOLDER_TEMPLATE", "{year}/Week {week}"),
-            collision_policy=env.get("COLLISION_POLICY", "Rename").title(),
-            max_path_length=int(env.get("MAX_FINAL_PATH_LENGTH", "240")),
-            artwork_cache=Path(env.get("ARTWORK_CACHE", "downloads/artwork_cache")),
+            output_root=Path(download["output_root"]),
+            filename_template=metadata["filename_template"],
+            folder_template=metadata["folder_template"],
+            collision_policy=metadata["collision_policy"].title(),
+            max_path_length=int(metadata["max_path_length"]),
+            artwork_cache=Path(metadata["artwork_cache"]),
+            write_genre=bool(metadata["write_genre"]),
+            write_artwork=bool(metadata["write_artwork"]),
+            write_comments=bool(metadata["write_comments"]),
+            write_track_number=bool(metadata["write_track_number"]),
+            write_year=bool(metadata["write_year"]),
         )
 
 

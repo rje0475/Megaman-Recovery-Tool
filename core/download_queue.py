@@ -80,9 +80,11 @@ class DownloadJob:
 class DownloadQueueManager:
     """Beheert alleen records en statusovergangen; voert niets uit."""
 
-    def __init__(self, database, log_callback=None):
+    def __init__(self, database, log_callback=None, settings_manager=None):
+        from core.settings import get_settings_manager
         self.database = database
         self.log_callback = log_callback or LOGGER.info
+        self.settings_manager = settings_manager or get_settings_manager()
         self._herstel_onafgeronde_jobs()
 
     def _now(self):
@@ -164,10 +166,11 @@ class DownloadQueueManager:
                 spotify_candidate_id,source_type,status,priority,
                 queue_position,retries,max_retries,progress,last_stage,
                 created_at,updated_at)
-                VALUES(?,?,?,?,?,'WAITING',0,?,?,3,0,'Wachten',?,?)""",
+                VALUES(?,?,?,?,?,'WAITING',0,?,?,?,0,'Wachten',?,?)""",
                 (job_id, row["id"], row["selected_youtube_candidate_id"],
                  row["selected_spotify_candidate_id"], "YOUTUBE",
-                 next_position, 0, now, now),
+                 next_position, 0,
+                 int(self.settings_manager.section("download")["retries"]), now, now),
             )
             created.append(job_id)
             next_position += 1
