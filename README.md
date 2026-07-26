@@ -369,3 +369,22 @@ status `MATCHED` worden toegevoegd; opnieuw uitvoeren is veilig.
 ```python
 sync_playlist(database, archive_set_name="Jaarcollectie")
 ```
+
+# YouTube-bronselectie (fase 2)
+
+Recovery-items zonder gekozen Spotify-match kunnen in de Recovery Review
+Wizard via **Search YouTube** worden opgezocht. Hiervoor wordt uitsluitend de
+officiële YouTube Data API v3 gebruikt; configureer de sleutel lokaal en neem
+deze nooit op in Git:
+
+```powershell
+$env:YOUTUBE_API_KEY="..."
+python main.py --gui
+```
+
+De wizard toont maximaal tien gededupliceerde kandidaten, scorecomponenten en
+waarschuwingen. Een keuze of “Geen geschikte YouTube-bron” wordt direct in
+SQLite opgeslagen en bij heropenen hersteld. **Search Again** behoudt een
+bestaande keuze, ook bij een API- of netwerkfout. Deze fase zoekt en bewaart
+alleen metadata: zij roept geen yt-dlp of FFmpeg-download aan, schrijft geen
+audio of ID3-tags en verplaatst geen bestanden.

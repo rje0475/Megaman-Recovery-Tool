@@ -63,6 +63,12 @@ class RecoveryReviewItem:
     selected_spotify_uri: str | None
     match_review_status: str | None
     candidates: tuple[ReviewCandidate, ...]
+    selected_youtube_candidate_id: int | None = None
+    selected_youtube_url: str | None = None
+    youtube_review_status: str | None = None
+    youtube_last_searched: str | None = None
+    youtube_search_error: str | None = None
+    preferred_audio_source: str | None = None
 
     @property
     def has_match(self):
@@ -363,6 +369,12 @@ def laad_recovery_review(
             selected_spotify_uri=rij["selected_spotify_uri"],
             match_review_status=rij["match_review_status"],
             candidates=kandidaten,
+            selected_youtube_candidate_id=rij["selected_youtube_candidate_id"],
+            selected_youtube_url=rij["selected_youtube_url"],
+            youtube_review_status=rij["youtube_review_status"],
+            youtube_last_searched=rij["youtube_last_searched"],
+            youtube_search_error=rij["youtube_search_error"],
+            preferred_audio_source=rij["preferred_audio_source"],
         ))
     return tuple(resultaat)
 

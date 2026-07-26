@@ -244,6 +244,19 @@ class SQLiteDatabase:
             "selected_spotify_confidence": "REAL",
             "match_review_status": "TEXT",
             "match_reviewed_at": "TEXT",
+            "selected_youtube_candidate_id": "INTEGER",
+            "selected_youtube_video_id": "TEXT",
+            "selected_youtube_url": "TEXT",
+            "selected_youtube_title": "TEXT",
+            "selected_youtube_channel": "TEXT",
+            "selected_youtube_duration_seconds": "INTEGER",
+            "selected_youtube_confidence": "REAL",
+            "youtube_review_status": "TEXT",
+            "youtube_reviewed_at": "TEXT",
+            "preferred_audio_source": "TEXT",
+            "youtube_last_searched": "TEXT",
+            "youtube_search_error": "TEXT",
+            "youtube_search_queries_json": "TEXT",
         }
 
         for kolom, kolomtype in recovery_migraties.items():
@@ -493,6 +506,42 @@ class SQLiteDatabase:
                     f"ALTER TABLE spotify_candidates "
                     f"ADD COLUMN {kolom} {kolomtype}"
                 )
+        self.verbinding.execute(
+            """
+            CREATE TABLE IF NOT EXISTS youtube_candidates (
+                id INTEGER PRIMARY KEY,
+                recovery_item_id INTEGER NOT NULL,
+                video_id TEXT NOT NULL,
+                youtube_url TEXT NOT NULL,
+                title TEXT NOT NULL,
+                channel_name TEXT,
+                duration_seconds INTEGER,
+                published_at TEXT,
+                view_count INTEGER,
+                thumbnail_url TEXT,
+                confidence REAL NOT NULL,
+                artist_score REAL NOT NULL,
+                title_score REAL NOT NULL,
+                version_score REAL NOT NULL,
+                duration_score REAL NOT NULL,
+                channel_score REAL NOT NULL,
+                penalty_score REAL NOT NULL,
+                warnings_json TEXT NOT NULL DEFAULT '[]',
+                raw_metadata_json TEXT NOT NULL DEFAULT '{}',
+                search_query TEXT NOT NULL DEFAULT '',
+                rank_number INTEGER,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (recovery_item_id) REFERENCES recovery_items(id)
+                    ON DELETE CASCADE,
+                UNIQUE (recovery_item_id, video_id)
+            )
+            """
+        )
+        self.verbinding.execute(
+            """CREATE INDEX IF NOT EXISTS idx_youtube_candidates_item
+            ON youtube_candidates(recovery_item_id, confidence DESC)"""
+        )
         rar_item_kolommen = {
             rij["name"] for rij in self.verbinding.execute(
                 "PRAGMA table_info(rar_inventory_items)"

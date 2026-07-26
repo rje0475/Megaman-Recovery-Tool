@@ -6,6 +6,8 @@ from threading import Event
 from PySide6.QtCore import QObject, Signal, Slot
 
 from gui.workflow import WorkflowCallbacks
+from core.youtube.search import zoek_youtube_kandidaten
+from database import SQLiteDatabase
 
 
 class WorkflowWorker(QObject):
@@ -79,3 +81,35 @@ class WorkflowWorker(QObject):
         """Thread-safe: alleen eenvoudige waarden plus threading.Event."""
         self._review_result = accepted
         self._review_event.set()
+
+
+class YouTubeSearchWorker(QObject):
+    """Korte, afzonderlijke netwerkworker voor de Review Wizard."""
+
+    completed = Signal(object, bool)
+    failed = Signal(str)
+    finished = Signal()
+
+    def __init__(self, database_path, recovery_item_id, provider_factory, parent=None):
+        super().__init__(parent)
+        self.database_path = database_path
+        self.recovery_item_id = int(recovery_item_id)
+        self.provider_factory = provider_factory
+        self.setObjectName("YouTubeSearchWorker")
+
+    @Slot()
+    def run(self):
+        database = None
+        try:
+            database = SQLiteDatabase(self.database_path)
+            candidates, selected_missing = zoek_youtube_kandidaten(
+                database, self.recovery_item_id,
+                provider=self.provider_factory(), search_again=True,
+            )
+            self.completed.emit(tuple(dict(row) for row in candidates), selected_missing)
+        except Exception as error:
+            self.failed.emit(str(error) or type(error).__name__)
+        finally:
+            if database is not None:
+                database.sluit()
+            self.finished.emit()

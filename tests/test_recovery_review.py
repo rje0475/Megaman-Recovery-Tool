@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEventLoop, QThread, QTimer, Qt
 from PySide6.QtWidgets import QApplication
 
 from core.recovery_review import (
@@ -21,6 +21,8 @@ from gui.recovery_review import (
     PlaylistResultDialog,
     RecoveryReviewDialog,
 )
+from gui.workers import YouTubeSearchWorker
+from core.youtube.models import YouTubeVideo
 
 
 class RecoveryReviewTest(unittest.TestCase):
@@ -196,7 +198,7 @@ class RecoveryReviewTest(unittest.TestCase):
                 dialog.detail_labels["matches"].text(), "0"
             )
             self.assertFalse(dialog.youtube_button.isHidden())
-            self.assertFalse(dialog.youtube_button.isEnabled())
+            self.assertTrue(dialog.youtube_button.isEnabled())
         finally:
             dialog.reject()
 
@@ -500,6 +502,92 @@ class RecoveryReviewTest(unittest.TestCase):
             self.assertEqual(dialog.playlist_name, "Mijn herstelplaylist")
         finally:
             dialog.reject()
+
+    def test_youtube_filter_selectie_tellingen_en_echte_url(self):
+        cursor = self.db.verbinding.execute(
+            """INSERT INTO youtube_candidates(
+            recovery_item_id,video_id,youtube_url,title,channel_name,
+            confidence,artist_score,title_score,version_score,duration_score,
+            channel_score,penalty_score,warnings_json,raw_metadata_json,
+            search_query,created_at,updated_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (self.missing, "vid1", "https://www.youtube.com/watch?v=vid1",
+             "Soulmate", "Natasha - Topic", .97, 1, 1, 1, 1, 1, 0,
+             "[]", "{}", "Natasha Soulmate", "nu", "nu"),
+        )
+        self.db.verbinding.execute(
+            "UPDATE recovery_items SET youtube_last_searched='nu' WHERE id=?",
+            (self.missing,),
+        )
+        self.db.verbinding.commit()
+        dialog = RecoveryReviewDialog(
+            self.set_id, "Jaarcollectie",
+            database_factory=maak_database, database_path=self.path,
+        )
+        try:
+            dialog._youtube_candidate_toggled(
+                self.missing, cursor.lastrowid, True
+            )
+            self.assertIn("YouTube gekozen: 1", dialog.summary_label.text())
+            dialog.filter_combo.setCurrentText("YouTube-bron gekozen")
+            self.assertEqual(len(dialog._visible_rows()), 1)
+            row = dialog._visible_rows()[0]
+            dialog.table.selectRow(row)
+            QApplication.processEvents()
+            with patch("gui.recovery_review.QDesktopServices.openUrl") as opened:
+                dialog._open_youtube()
+            self.assertEqual(
+                opened.call_args.args[0].toString(),
+                "https://www.youtube.com/watch?v=vid1",
+            )
+        finally:
+            dialog.reject()
+
+    def test_youtube_geen_bron_blijft_persistent(self):
+        dialog = RecoveryReviewDialog(
+            self.set_id, "Jaarcollectie",
+            database_factory=maak_database, database_path=self.path,
+        )
+        try:
+            row = next(
+                row for row in range(dialog.table.rowCount())
+                if dialog._item_for_row(row).id == self.missing
+            )
+            dialog.table.selectRow(row)
+            dialog._no_youtube_source()
+            reopened = laad_recovery_review(
+                dialog.database, self.set_id, apply_auto_selection=False
+            )
+            item = next(item for item in reopened if item.id == self.missing)
+            self.assertEqual(item.youtube_review_status, "REVIEWED_NONE")
+        finally:
+            dialog.reject()
+
+    def test_youtube_worker_draait_in_thread_en_ruimt_op(self):
+        class Provider:
+            def search(_self, _query, limit=10):
+                return (YouTubeVideo(
+                    "vid", "https://www.youtube.com/watch?v=vid",
+                    "Natasha Bedingfield Soulmate", "Natasha - Topic", 240,
+                ),)
+
+        thread = QThread()
+        worker = YouTubeSearchWorker(
+            self.path, self.missing, lambda: Provider()
+        )
+        worker.moveToThread(thread)
+        loop = QEventLoop()
+        results = []
+        worker.completed.connect(lambda rows, missing: results.append(rows))
+        thread.started.connect(worker.run)
+        worker.finished.connect(thread.quit)
+        thread.finished.connect(loop.quit)
+        thread.start()
+        QTimer.singleShot(5000, loop.quit)
+        loop.exec()
+        thread.wait(1000)
+        self.assertFalse(thread.isRunning())
+        self.assertTrue(results)
 
 
 if __name__ == "__main__":

@@ -310,6 +310,46 @@ def maak_rapport(map_pad, database):
             )
         f.write("\n")
 
+        f.write("YouTube bronselectie\n")
+        f.write("------------------------------\n")
+        youtube_items = database.verbinding.execute(
+            """
+            SELECT r.id, r.bepaalde_artiest, r.bepaalde_titel,
+                   r.youtube_review_status, r.selected_youtube_url,
+                   r.youtube_search_error, c.confidence, c.warnings_json,
+                   c.search_query, r.youtube_search_queries_json,
+                   (SELECT COUNT(*) FROM youtube_candidates allc
+                    WHERE allc.recovery_item_id=r.id) candidate_count,
+                   (SELECT GROUP_CONCAT(DISTINCT allq.search_query)
+                    FROM youtube_candidates allq
+                    WHERE allq.recovery_item_id=r.id) search_queries
+            FROM recovery_items r
+            LEFT JOIN youtube_candidates c
+              ON c.id=r.selected_youtube_candidate_id
+            WHERE r.youtube_last_searched IS NOT NULL
+               OR r.youtube_review_status IS NOT NULL
+            ORDER BY r.id
+            """
+        ).fetchall()
+        f.write(f"Items gezocht/beoordeeld: {len(youtube_items)}\n")
+        f.write(
+            "Klaar voor toekomstige download: "
+            f"{sum(bool(i['selected_youtube_url']) and i['youtube_review_status'] == 'SELECTED' for i in youtube_items)}\n"
+        )
+        for item in youtube_items:
+            f.write(
+                f"ID {item['id']}: {item['bepaalde_artiest'] or ''} - "
+                f"{item['bepaalde_titel'] or ''} | "
+                f"status={item['youtube_review_status'] or 'NOT_REVIEWED'} | "
+                f"queries={item['youtube_search_queries_json'] or item['search_queries'] or item['search_query'] or '—'} | "
+                f"kandidaten={item['candidate_count']} | "
+                f"url={item['selected_youtube_url'] or '—'} | "
+                f"confidence={item['confidence'] if item['confidence'] is not None else '—'} | "
+                f"warnings={item['warnings_json'] or '[]'} | "
+                f"fout={item['youtube_search_error'] or '—'}\n"
+            )
+        f.write("\n")
+
         if nul_bytes:
 
             f.write("0-byte bestanden\n")

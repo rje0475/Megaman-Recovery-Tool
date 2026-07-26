@@ -1,8 +1,10 @@
 """Recovery Review Wizard tussen Spotify Search en playlistcreatie."""
 
+import json
+
 from functools import partial
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import Qt, QThread, QUrl
 from PySide6.QtGui import QDesktopServices, QPixmap
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from PySide6.QtWidgets import (
@@ -21,6 +23,7 @@ from PySide6.QtWidgets import (
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -32,6 +35,13 @@ from core.recovery_review import (
     stel_playlist_selectie_in,
 )
 from database import DATABASE_BESTAND, SQLiteDatabase
+from core.youtube.provider import YouTubeSearchProvider
+from core.youtube.search import (
+    laad_youtube_kandidaten,
+    markeer_geen_youtube_bron,
+    selecteer_youtube_kandidaat,
+)
+from gui.workers import YouTubeSearchWorker
 
 
 KOLOMMEN = (
@@ -55,6 +65,11 @@ FILTERS = (
     "FFmpeg-fout",
     "0-byte",
     "Missing",
+    "YouTube nog niet gezocht",
+    "YouTube kandidaten gevonden",
+    "YouTube-bron gekozen",
+    "Geen geschikte YouTube-bron",
+    "Klaar voor toekomstige recovery",
 )
 
 
@@ -179,6 +194,8 @@ class RecoveryReviewDialog(QDialog):
         self._candidate_groups = {}
         self._retired_candidate_widgets = []
         self._network = QNetworkAccessManager(self)
+        self.youtube_thread = None
+        self.youtube_worker = None
         self._building_table = False
         self.playlist_requested = False
         self.prepared_playlist_name = recovery_set_name
@@ -253,6 +270,7 @@ class RecoveryReviewDialog(QDialog):
             ("recovery", "Recovery status"),
             ("spotify", "Spotify status"),
             ("matches", "Aantal Spotify matches"),
+            ("source", "Bronkeuze"),
         )):
             detail_grid.addWidget(QLabel(f"{label}:"), rij, 0)
             waarde = QLabel("—")
@@ -269,10 +287,30 @@ class RecoveryReviewDialog(QDialog):
         self.open_spotify_button.clicked.connect(self._open_spotify)
         kandidaat_acties.addWidget(self.open_spotify_button)
         self.youtube_button = QPushButton("Search YouTube")
-        self.youtube_button.setEnabled(False)
+        self.youtube_button.clicked.connect(self._search_youtube)
         kandidaat_acties.addWidget(self.youtube_button)
         kandidaat_acties.addStretch(1)
         self.detail_layout.addLayout(kandidaat_acties)
+        self.youtube_box = QGroupBox("YouTube")
+        youtube_layout = QVBoxLayout(self.youtube_box)
+        self.youtube_status_label = QLabel("Nog niet gezocht op YouTube.")
+        self.youtube_status_label.setWordWrap(True)
+        youtube_layout.addWidget(self.youtube_status_label)
+        self.youtube_candidates_layout = QVBoxLayout()
+        youtube_layout.addLayout(self.youtube_candidates_layout)
+        youtube_actions = QHBoxLayout()
+        self.search_again_button = QPushButton("Search Again")
+        self.search_again_button.clicked.connect(self._search_youtube)
+        self.no_youtube_button = QPushButton("Geen geschikte YouTube-bron")
+        self.no_youtube_button.clicked.connect(self._no_youtube_source)
+        self.open_youtube_button = QPushButton("Open op YouTube")
+        self.open_youtube_button.setEnabled(False)
+        self.open_youtube_button.clicked.connect(self._open_youtube)
+        youtube_actions.addWidget(self.search_again_button)
+        youtube_actions.addWidget(self.no_youtube_button)
+        youtube_actions.addWidget(self.open_youtube_button)
+        youtube_layout.addLayout(youtube_actions)
+        self.detail_layout.addWidget(self.youtube_box)
         self.detail_layout.addStretch(1)
         detail_scroll.setWidget(self.detail_widget)
         splitter.addWidget(detail_scroll)
@@ -464,6 +502,24 @@ class RecoveryReviewDialog(QDialog):
             return False
         if filter_name == "Missing" and item.recovery_status != "Missing":
             return False
+        youtube_rows = laad_youtube_kandidaten(self.database, item.id)
+        if filter_name == "YouTube nog niet gezocht" and item.youtube_last_searched:
+            return False
+        if filter_name == "YouTube kandidaten gevonden" and not youtube_rows:
+            return False
+        if filter_name == "YouTube-bron gekozen" and not item.selected_youtube_url:
+            return False
+        if (
+            filter_name == "Geen geschikte YouTube-bron"
+            and item.youtube_review_status != "REVIEWED_NONE"
+        ):
+            return False
+        if filter_name == "Klaar voor toekomstige recovery" and not (
+            item.selected_for_playlist
+            and item.selected_youtube_url
+            and item.youtube_review_status == "SELECTED"
+        ):
+            return False
         if search:
             haystack = " ".join(str(waarde or "") for waarde in (
                 item.original_filename, item.artist, item.title,
@@ -505,7 +561,12 @@ class RecoveryReviewDialog(QDialog):
             f"Met gekozen Spotify-match: {met_match} | "
             f"Klaar voor playlist: {klaar} | "
             f"Nog te beoordelen: {nog} | "
-            f"Geen Spotify-match: {geen_match}"
+            f"Geen Spotify-match: {geen_match} | "
+            f"YouTube gekozen: {sum(bool(i.selected_youtube_url) for i in self.items)} | "
+            f"Geen geschikte YouTube-bron: "
+            f"{sum(i.youtube_review_status == 'REVIEWED_NONE' for i in self.items)} | "
+            f"Klaar voor toekomstige download: "
+            f"{sum(i.selected_for_playlist and bool(i.selected_youtube_url) and i.youtube_review_status == 'SELECTED' for i in self.items)}"
         )
         self.continue_button.setEnabled(bool(selected))
         self._apply_filter()
@@ -534,6 +595,11 @@ class RecoveryReviewDialog(QDialog):
             "recovery": item.recovery_status,
             "spotify": item.spotify_status,
             "matches": len(item.candidates),
+            "source": (
+                "YouTube-bron" if item.preferred_audio_source == "YOUTUBE"
+                else "Spotify-identificatie" if item.selected_candidate_id
+                else "Nog niet gekozen"
+            ),
         }
         for key, waarde in waarden.items():
             self.detail_labels[key].setText(
@@ -549,13 +615,16 @@ class RecoveryReviewDialog(QDialog):
                 and gekozen.spotify_url
             )
         )
+        # YouTube mag ook bewust als audiobron naast Spotify-identificatie.
+        self.youtube_button.setEnabled(True)
+        self._toon_youtube_candidates(item)
         if not item.candidates:
             self.candidates_layout.addWidget(QLabel(
                 "No Spotify match found."
             ))
             self.youtube_button.setVisible(True)
             return
-        self.youtube_button.setVisible(False)
+        self.youtube_button.setVisible(True)
         for kandidaat in item.candidates:
             kaart = QGroupBox()
             rij = QHBoxLayout(kaart)
@@ -604,6 +673,139 @@ class RecoveryReviewDialog(QDialog):
                 reply.finished.connect(partial(
                     self._cover_loaded, reply, cover
                 ))
+
+    def _clear_youtube_candidates(self):
+        while self.youtube_candidates_layout.count():
+            child = self.youtube_candidates_layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+
+    def _toon_youtube_candidates(self, item):
+        self._clear_youtube_candidates()
+        rows = laad_youtube_kandidaten(self.database, item.id)
+        selected_id = item.selected_youtube_candidate_id
+        self.youtube_status_label.setText(
+            item.youtube_search_error
+            or (f"{len(rows)} kandidaat/kandidaten gevonden."
+                if rows else "Nog geen YouTube-kandidaten gevonden.")
+        )
+        group = QButtonGroup(self.youtube_box)
+        group.setExclusive(True)
+        for row in rows:
+            card = QGroupBox()
+            layout = QHBoxLayout(card)
+            thumbnail = QLabel("Geen\nthumbnail")
+            thumbnail.setFixedSize(96, 72)
+            thumbnail.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            layout.addWidget(thumbnail)
+            radio = QRadioButton()
+            radio.setChecked(row["id"] == selected_id)
+            radio.toggled.connect(partial(
+                self._youtube_candidate_toggled, item.id, row["id"]
+            ))
+            group.addButton(radio)
+            layout.addWidget(radio)
+            duration = (
+                f"{row['duration_seconds'] // 60}:"
+                f"{row['duration_seconds'] % 60:02d}"
+                if row["duration_seconds"] else "—"
+            )
+            warnings = "; ".join(json.loads(row["warnings_json"] or "[]")) or "—"
+            label = QLabel(
+                f"{row['title']}\nKanaal: {row['channel_name'] or '—'} | "
+                f"Duur: {duration} | Publicatie: {row['published_at'] or '—'}\n"
+                f"Weergaven: {row['view_count'] if row['view_count'] is not None else '—'} | "
+                f"Confidence: {row['confidence']:.0%}\n"
+                f"Scores: artiest {row['artist_score']:.0%}, titel {row['title_score']:.0%}, "
+                f"versie {row['version_score']:.0%}, duur {row['duration_score']:.0%}, "
+                f"kanaal {row['channel_score']:.0%}, straf {row['penalty_score']:.0%}\n"
+                f"Waarschuwingen: {warnings}\n{row['youtube_url']}"
+            )
+            label.setWordWrap(True)
+            layout.addWidget(label, stretch=1)
+            self.youtube_candidates_layout.addWidget(card)
+            if row["thumbnail_url"]:
+                reply = self._network.get(QNetworkRequest(
+                    QUrl(row["thumbnail_url"])
+                ))
+                reply.finished.connect(partial(
+                    self._cover_loaded, reply, thumbnail
+                ))
+        self.open_youtube_button.setEnabled(bool(item.selected_youtube_url))
+
+    def _search_youtube(self):
+        item = self._item_for_row(self.table.currentRow())
+        if item is None or (self.youtube_thread and self.youtube_thread.isRunning()):
+            return
+        self.youtube_status_label.setText("YouTube wordt doorzocht…")
+        self.youtube_button.setEnabled(False)
+        self.search_again_button.setEnabled(False)
+        thread = QThread(self)
+        worker = YouTubeSearchWorker(
+            self.database.pad, item.id, YouTubeSearchProvider.from_environment
+        )
+        thread.setObjectName("YouTubeSearchThread")
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.completed.connect(self._youtube_search_completed)
+        worker.failed.connect(self._youtube_search_failed)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._youtube_thread_finished)
+        self.youtube_thread, self.youtube_worker = thread, worker
+        thread.start()
+
+    def _youtube_search_completed(self, _rows, selected_missing):
+        self._reload_items()
+        item = self._item_for_row(self.table.currentRow())
+        if item:
+            self._toon_youtube_candidates(item)
+        if selected_missing:
+            QMessageBox.warning(
+                self, "YouTube", "De eerder gekozen video staat niet meer in de zoekresultaten; de keuze is behouden."
+            )
+
+    def _youtube_search_failed(self, message):
+        self.youtube_status_label.setText(message)
+        QMessageBox.warning(self, "YouTube zoeken", message)
+
+    def _youtube_thread_finished(self):
+        self.youtube_thread = None
+        self.youtube_worker = None
+        self.search_again_button.setEnabled(True)
+        item = self._item_for_row(self.table.currentRow())
+        self.youtube_button.setEnabled(bool(item))
+
+    def _reload_items(self):
+        self.items = laad_recovery_review(
+            self.database, self.recovery_set_id, apply_auto_selection=False
+        )
+        self._items_by_id = {item.id: item for item in self.items}
+
+    def _youtube_candidate_toggled(self, item_id, candidate_id, checked):
+        if not checked:
+            return
+        selecteer_youtube_kandidaat(self.database, item_id, candidate_id)
+        self._reload_items()
+        self._update_summary()
+        item = self._items_by_id[item_id]
+        self.open_youtube_button.setEnabled(bool(item.selected_youtube_url))
+
+    def _no_youtube_source(self):
+        item = self._item_for_row(self.table.currentRow())
+        if item:
+            markeer_geen_youtube_bron(self.database, item.id)
+            self._reload_items()
+            self._toon_youtube_candidates(self._items_by_id[item.id])
+            self._update_summary()
+
+    def _open_youtube(self):
+        item = self._item_for_row(self.table.currentRow())
+        if item:
+            item = self._items_by_id[item.id]
+            if item.selected_youtube_url:
+                QDesktopServices.openUrl(QUrl(item.selected_youtube_url))
 
     def _cover_loaded(self, reply, label):
         data = reply.readAll()
@@ -758,6 +960,13 @@ class RecoveryReviewDialog(QDialog):
         self.done(2)
 
     def closeEvent(self, event):
+        if self.youtube_thread and self.youtube_thread.isRunning():
+            QMessageBox.information(
+                self, "YouTube zoeken",
+                "De YouTube-zoekopdracht wordt nog uitgevoerd. Wacht tot deze klaar is.",
+            )
+            event.ignore()
+            return
         self.database.sluit()
         super().closeEvent(event)
 
