@@ -15,7 +15,12 @@ a = Analysis(
 )
 pyz = PYZ(a.pure)
 exe = EXE(
-    pyz, a.scripts, a.binaries, a.datas, [],
+    pyz, a.scripts, [],
     name="MegamanRecoveryTool", debug=False, bootloader_ignore_signals=False,
     strip=False, upx=True, console=False, disable_windowed_traceback=False,
+    exclude_binaries=True,
+)
+collect = COLLECT(
+    exe, a.binaries, a.datas,
+    strip=False, upx=True, name="MegamanRecoveryTool",
 )

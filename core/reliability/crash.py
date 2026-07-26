@@ -51,8 +51,11 @@ class CrashReporter:
         return target
 
 
-def install_global_exception_handler(reporter=None):
-    reporter = reporter or CrashReporter()
+def install_global_exception_handler(reporter=None, user_notifier=None):
+    """Installeer hooks; ``user_notifier`` is de enige publieke notifier-API."""
+    reporter = reporter or CrashReporter(user_notifier=user_notifier)
+    if user_notifier is not None:
+        reporter.user_notifier = user_notifier
 
     def system_hook(exc_type, exc_value, exc_traceback):
         reporter.report(exc_type, exc_value, exc_traceback)

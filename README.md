@@ -579,7 +579,10 @@ python -m pip install -r requirements-build.txt
 python -m PyInstaller --clean --noconfirm megaman_recovery.spec
 ```
 
-Uitvoer: `dist/MegamanRecoveryTool.exe`.
+Uitvoer: `dist/MegamanRecoveryTool/MegamanRecoveryTool.exe`. De release gebruikt
+bewust een windowed onedir-build: alle Qt-plug-ins (waaronder `qwindows.dll`)
+staan zichtbaar naast de executable en er is geen kwetsbare onefile-
+uitpakfase vóór Python-startup.
 
 ## Screenshots
 
