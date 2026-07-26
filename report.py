@@ -310,6 +310,24 @@ def maak_rapport(map_pad, database):
             )
         f.write("\n")
 
+        f.write("Download Queue\n")
+        f.write("------------------------------\n")
+        download_jobs = database.verbinding.execute(
+            """SELECT q.*,r.bepaalde_artiest,r.bepaalde_titel
+            FROM download_queue q JOIN recovery_items r
+              ON r.id=q.recovery_item_id
+            ORDER BY q.queue_position"""
+        ).fetchall()
+        f.write(f"Aantal jobs: {len(download_jobs)}\n")
+        for job in download_jobs:
+            f.write(
+                f"{job['queue_position']}. {job['job_id']} | "
+                f"{job['bepaalde_artiest'] or ''} - {job['bepaalde_titel'] or ''} | "
+                f"status={job['status']} | retries={job['retries']}/"
+                f"{job['max_retries']} | fout={job['last_error'] or '—'}\n"
+            )
+        f.write("\n")
+
         f.write("YouTube bronselectie\n")
         f.write("------------------------------\n")
         youtube_items = database.verbinding.execute(

@@ -388,3 +388,17 @@ SQLite opgeslagen en bij heropenen hersteld. **Search Again** behoudt een
 bestaande keuze, ook bij een API- of netwerkfout. Deze fase zoekt en bewaart
 alleen metadata: zij roept geen yt-dlp of FFmpeg-download aan, schrijft geen
 audio of ID3-tags en verplaatst geen bestanden.
+
+# Download Queue (fase 3)
+
+Na het kiezen van een geldige YouTube-bron zet **Prepare Downloads** ieder
+geselecteerd en afgerond recovery-item precies eenmaal in de persistente
+downloadqueue. De queue kan worden geordend, gepauzeerd, hervat, geannuleerd
+en na een herstart veilig worden herladen.
+
+**Start Queue is in deze fase uitsluitend een statussimulator.** Met korte
+Qt-timers doorloopt een job `WAITING`, `QUEUED`, `PREPARING`, `RUNNING` en
+`COMPLETED`. Er wordt geen netwerkverbinding gemaakt, geen subprocess gestart,
+geen yt-dlp of FFmpeg aangeroepen en geen audio- of ander mediabestand
+geschreven. Een job die tijdens afsluiten `RUNNING` was, wordt bij de volgende
+start teruggezet naar `WAITING`.

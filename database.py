@@ -542,6 +542,44 @@ class SQLiteDatabase:
             """CREATE INDEX IF NOT EXISTS idx_youtube_candidates_item
             ON youtube_candidates(recovery_item_id, confidence DESC)"""
         )
+        self.verbinding.execute(
+            """
+            CREATE TABLE IF NOT EXISTS download_queue (
+                job_id TEXT PRIMARY KEY,
+                recovery_item_id INTEGER NOT NULL UNIQUE,
+                youtube_candidate_id INTEGER,
+                spotify_candidate_id INTEGER,
+                source_type TEXT NOT NULL,
+                status TEXT NOT NULL,
+                priority INTEGER NOT NULL DEFAULT 0,
+                queue_position INTEGER NOT NULL,
+                retries INTEGER NOT NULL DEFAULT 0,
+                max_retries INTEGER NOT NULL DEFAULT 3,
+                progress INTEGER NOT NULL DEFAULT 0,
+                last_stage TEXT,
+                error_code TEXT,
+                last_error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                started_at TEXT,
+                finished_at TEXT,
+                FOREIGN KEY (recovery_item_id) REFERENCES recovery_items(id)
+                    ON DELETE CASCADE,
+                FOREIGN KEY (youtube_candidate_id) REFERENCES youtube_candidates(id)
+                    ON DELETE SET NULL,
+                FOREIGN KEY (spotify_candidate_id) REFERENCES spotify_candidates(id)
+                    ON DELETE SET NULL
+            )
+            """
+        )
+        self.verbinding.execute(
+            """CREATE UNIQUE INDEX IF NOT EXISTS idx_download_queue_position
+            ON download_queue(queue_position)"""
+        )
+        self.verbinding.execute(
+            """CREATE INDEX IF NOT EXISTS idx_download_queue_status
+            ON download_queue(status, priority DESC, queue_position)"""
+        )
         rar_item_kolommen = {
             rij["name"] for rij in self.verbinding.execute(
                 "PRAGMA table_info(rar_inventory_items)"

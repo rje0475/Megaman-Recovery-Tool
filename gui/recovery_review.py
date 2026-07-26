@@ -42,6 +42,8 @@ from core.youtube.search import (
     selecteer_youtube_kandidaat,
 )
 from gui.workers import YouTubeSearchWorker
+from core.download_queue import DownloadQueueManager
+from gui.download_queue import DownloadQueueDialog
 
 
 KOLOMMEN = (
@@ -179,11 +181,14 @@ class RecoveryReviewDialog(QDialog):
     def __init__(
         self, recovery_set_id, recovery_set_name, parent=None,
         database_factory=SQLiteDatabase, database_path=DATABASE_BESTAND,
+        queue_dialog_factory=DownloadQueueDialog,
     ):
         super().__init__(parent)
         self.recovery_set_id = int(recovery_set_id)
         self.recovery_set_name = recovery_set_name
         self.database = database_factory(database_path)
+        self.database_path = database_path
+        self.queue_dialog_factory = queue_dialog_factory
         self.items = laad_recovery_review(
             self.database, self.recovery_set_id
         )
@@ -198,6 +203,7 @@ class RecoveryReviewDialog(QDialog):
         self.youtube_worker = None
         self._building_table = False
         self.playlist_requested = False
+        self.queue_dialog = None
         self.prepared_playlist_name = recovery_set_name
         self.setWindowTitle(f"Recovery Review — {recovery_set_name}")
         self.resize(1360, 800)
@@ -324,14 +330,17 @@ class RecoveryReviewDialog(QDialog):
         onder = QHBoxLayout()
         self.back_button = QPushButton("Back")
         self.continue_button = QPushButton("Playlist voorbereiden")
+        self.prepare_downloads_button = QPushButton("Prepare Downloads")
         self.cancel_button = QPushButton("Cancel")
         self.continue_button.setEnabled(False)
         self.back_button.clicked.connect(self._back)
         self.continue_button.clicked.connect(self._continue)
+        self.prepare_downloads_button.clicked.connect(self._prepare_downloads)
         self.cancel_button.clicked.connect(self.reject)
         onder.addWidget(self.back_button)
         onder.addStretch(1)
         onder.addWidget(self.continue_button)
+        onder.addWidget(self.prepare_downloads_button)
         onder.addWidget(self.cancel_button)
         layout.addLayout(onder)
 
@@ -569,7 +578,21 @@ class RecoveryReviewDialog(QDialog):
             f"{sum(i.selected_for_playlist and bool(i.selected_youtube_url) and i.youtube_review_status == 'SELECTED' for i in self.items)}"
         )
         self.continue_button.setEnabled(bool(selected))
+        self.prepare_downloads_button.setEnabled(any(
+            item.id in selected and bool(item.selected_youtube_url)
+            and item.youtube_review_status == "SELECTED"
+            for item in self.items
+        ))
         self._apply_filter()
+
+    def _prepare_downloads(self):
+        manager = DownloadQueueManager(self.database)
+        created = manager.enqueue(item.id for item in self.items)
+        self.queue_dialog = self.queue_dialog_factory(
+            self, database_path=self.database_path
+        )
+        self.queue_dialog.setProperty("newJobs", len(created))
+        self.queue_dialog.show()
 
     def _clear_candidates(self):
         while self.candidates_layout.count():

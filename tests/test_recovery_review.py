@@ -7,7 +7,7 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEventLoop, QThread, QTimer, Qt
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QDialog
 
 from core.recovery_review import (
     bewaar_recovery_review,
@@ -588,6 +588,48 @@ class RecoveryReviewTest(unittest.TestCase):
         thread.wait(1000)
         self.assertFalse(thread.isRunning())
         self.assertTrue(results)
+
+    def test_prepare_downloads_opent_queue_en_voegt_een_job_toe(self):
+        candidate = self.db.verbinding.execute(
+            """INSERT INTO youtube_candidates(
+            recovery_item_id,video_id,youtube_url,title,channel_name,
+            confidence,artist_score,title_score,version_score,duration_score,
+            channel_score,penalty_score,warnings_json,raw_metadata_json,
+            search_query,created_at,updated_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (self.missing, "queue-video", "https://youtube/queue-video",
+             "Soulmate", "Natasha - Topic", .98, 1, 1, 1, 1, 1, 0,
+             "[]", "{}", "query", "nu", "nu"),
+        ).lastrowid
+        self.db.verbinding.execute(
+            """UPDATE recovery_items SET playlist_selected=1,
+            selected_youtube_candidate_id=?,selected_youtube_url=?,
+            youtube_review_status='SELECTED' WHERE id=?""",
+            (candidate, "https://youtube/queue-video", self.missing),
+        )
+        self.db.verbinding.commit()
+
+        class QueueDialog(QDialog):
+            def __init__(self, parent=None, database_path=None):
+                super().__init__(parent)
+                self.database_path = database_path
+
+        dialog = RecoveryReviewDialog(
+            self.set_id, "Jaarcollectie", database_factory=maak_database,
+            database_path=self.path, queue_dialog_factory=QueueDialog,
+        )
+        try:
+            self.assertTrue(dialog.prepare_downloads_button.isEnabled())
+            dialog._prepare_downloads()
+            self.assertEqual(dialog.queue_dialog.property("newJobs"), 1)
+            count = dialog.database.verbinding.execute(
+                "SELECT COUNT(*) FROM download_queue"
+            ).fetchone()[0]
+            self.assertEqual(count, 1)
+            dialog._prepare_downloads()
+            self.assertEqual(dialog.queue_dialog.property("newJobs"), 0)
+        finally:
+            dialog.reject()
 
 
 if __name__ == "__main__":
