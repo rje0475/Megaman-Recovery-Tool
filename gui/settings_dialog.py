@@ -1,6 +1,7 @@
 """PySide6-instellingenvenster voor de centrale SettingsManager."""
 
-from pathlib import Path
+import logging
+import time
 
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
@@ -49,19 +50,32 @@ SCHEMA = {
                  ("write_year", "Jaar schrijven", "bool")),
 }
 
+LOGGER = logging.getLogger(__name__)
+DIAGNOSTIC_NAMES = (
+    "Python", "SQLite", "Mutagen", "yt-dlp", "FFmpeg", "ffprobe",
+    "Spotify auth", "YouTube API",
+)
+
 
 class SettingsDialog(QDialog):
-    def __init__(self, parent=None, manager=None):
+    def __init__(self, parent=None, manager=None, action_started_at=None):
+        self._settings_started_at = action_started_at or time.monotonic()
+        self._visible_logged = False
+        self._mark_timing("SettingsDialog constructie gestart")
         super().__init__(parent)
         self.manager = manager or get_settings_manager()
+        snapshot = self.manager.settings.as_dict()
+        self._mark_timing("configuratie geladen")
         self.widgets = {}
         self.setWindowTitle("Settings")
         self.resize(680, 560)
         layout = QVBoxLayout(self)
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs)
-        self._build_tabs()
+        self._build_tabs(snapshot)
+        self._mark_timing("widgets aangemaakt")
         self._build_diagnostics()
+        self._mark_timing("providers/services niet geïnitialiseerd (lazy)")
         self.validation_label = QLabel()
         layout.addWidget(self.validation_label)
         actions = QHBoxLayout()
@@ -75,8 +89,17 @@ class SettingsDialog(QDialog):
         layout.addWidget(buttons)
         self._validate_live()
 
-    def _build_tabs(self):
-        snapshot = self.manager.settings.as_dict()
+    def _mark_timing(self, stage):
+        elapsed = (time.monotonic() - self._settings_started_at) * 1000
+        LOGGER.info("Settings startup: %s; elapsed_ms=%.1f", stage, elapsed)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._visible_logged:
+            self._visible_logged = True
+            self._mark_timing("dialog zichtbaar; totale duur")
+
+    def _build_tabs(self, snapshot):
         section_names = {"General": "general", "Spotify": "spotify", "YouTube": "youtube",
                          "Downloads": "download", "Audio": "audio", "Metadata": "metadata"}
         for tab_name, fields in SCHEMA.items():
@@ -118,12 +141,21 @@ class SettingsDialog(QDialog):
             self.validation_label.setText(f"Ongeldig: {error}")
             self.validation_label.setStyleSheet("color: #b00020")
             return False
+        self.validation_label.setText("Instellingen zijn geldig.")
+        self.validation_label.setStyleSheet("color: #187a27")
+        return True
+
+    def validate_external(self):
+        """Voer snelle padcontroles alleen na een expliciete gebruikersactie uit."""
         warnings = self.manager.validate_external()
         self.validation_label.setText(
-            "Waarschuwing: " + warnings[0] if warnings else "Instellingen zijn geldig."
+            "Waarschuwing: " + warnings[0] if warnings
+            else "Externe paden zijn geldig."
         )
-        self.validation_label.setStyleSheet("color: #9a6700" if warnings else "color: #187a27")
-        return True
+        self.validation_label.setStyleSheet(
+            "color: #9a6700" if warnings else "color: #187a27"
+        )
+        return not warnings
 
     def save(self):
         if not self._validate_live(): return
@@ -147,6 +179,32 @@ class SettingsDialog(QDialog):
         QMessageBox.information(self, "Defaults hersteld", "De standaardinstellingen zijn opgeslagen.")
 
     def _build_diagnostics(self):
-        page = QWidget(); form = QFormLayout(page)
-        for name, value in self.manager.diagnostics().items(): form.addRow(name, QLabel(value))
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        form = QFormLayout()
+        self.diagnostic_labels = {}
+        for name in DIAGNOSTIC_NAMES:
+            label = QLabel("Niet gecontroleerd")
+            self.diagnostic_labels[name] = label
+            form.addRow(name, label)
+        layout.addLayout(form)
+        refresh = QPushButton("Diagnostiek vernieuwen")
+        refresh.clicked.connect(self.refresh_diagnostics)
+        layout.addWidget(refresh)
+        validate = QPushButton("Externe paden controleren")
+        validate.clicked.connect(self.validate_external)
+        layout.addWidget(validate)
+        layout.addStretch(1)
+        self.diagnostics_refresh_button = refresh
+        self.external_validation_button = validate
         self.tabs.addTab(page, "Diagnostics")
+
+    def refresh_diagnostics(self):
+        """Zware versie- en toolchecks draaien uitsluitend expliciet."""
+        self.diagnostics_refresh_button.setEnabled(False)
+        try:
+            values = self.manager.diagnostics()
+            for name, label in self.diagnostic_labels.items():
+                label.setText(values.get(name, "onbekend"))
+        finally:
+            self.diagnostics_refresh_button.setEnabled(True)

@@ -1,6 +1,8 @@
 """Opgeruimd hoofdvenster voor één begeleide recoveryworkflow."""
 
+import logging
 import re
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -32,6 +34,9 @@ from gui.workers import WorkflowWorker
 from gui.settings_dialog import SettingsDialog
 from gui.release_dialogs import AboutDialog, HealthCheckDialog
 from core.release import BackupError, ProjectBackupManager
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 STAGE_SYMBOLS = {
@@ -100,7 +105,7 @@ class MegamanMainWindow(QMainWindow):
         backup.triggered.connect(self._backup_project)
         restore = bestand.addAction("Restore Project")
         restore.triggered.connect(self._restore_project)
-        action = self.menuBar().addAction("Settings")
+        action = self.menuBar().addAction("&Settings")
         action.triggered.connect(self._open_settings)
         tools = self.menuBar().addMenu("Tools")
         tools.addAction("Health Check").triggered.connect(
@@ -115,7 +120,12 @@ class MegamanMainWindow(QMainWindow):
         )
 
     def _open_settings(self):
-        SettingsDialog(self).exec()
+        started = time.monotonic()
+        LOGGER.info("Settings startup: settings action triggered; elapsed_ms=0.0")
+        dialog = SettingsDialog(self, action_started_at=started)
+        elapsed = (time.monotonic() - started) * 1000
+        LOGGER.info("Settings startup: exec() aangeroepen; elapsed_ms=%.1f", elapsed)
+        dialog.exec()
 
     def _backup_project(self):
         target, _ = QFileDialog.getSaveFileName(

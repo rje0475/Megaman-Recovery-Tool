@@ -1,8 +1,10 @@
 import json
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from PySide6.QtWidgets import QApplication
 
@@ -88,6 +90,90 @@ class SettingsTests(unittest.TestCase):
                                      "Audio", "Metadata", "Diagnostics"])
             dialog.widgets[("metadata", "filename_template")].setText("")
             self.assertIn("Ongeldig", dialog.validation_label.text())
+        finally:
+            dialog.close()
+
+    def test_open_is_lazy_and_performs_no_external_operations(self):
+        with patch("subprocess.run") as run, \
+                patch("subprocess.Popen") as popen, \
+                patch("urllib.request.urlopen") as urlopen, \
+                patch("os.walk") as walk, \
+                patch.object(Path, "rglob") as rglob, \
+                patch.object(self.manager, "diagnostics") as diagnostics, \
+                patch.object(self.manager, "validate_external") as external:
+            dialog = SettingsDialog(manager=self.manager)
+            try:
+                dialog.show()
+                self.app.processEvents()
+                self.assertTrue(dialog.isVisible())
+                run.assert_not_called()
+                popen.assert_not_called()
+                urlopen.assert_not_called()
+                walk.assert_not_called()
+                rglob.assert_not_called()
+                diagnostics.assert_not_called()
+                external.assert_not_called()
+            finally:
+                dialog.close()
+
+    def test_saved_values_are_shown_without_tool_version_checks(self):
+        self.manager.update_section("audio", {
+            "ffmpeg_path": "C:/Tools/ffmpeg.exe",
+            "ffprobe_path": "C:/Tools/ffprobe.exe",
+        })
+        with patch("core.settings.manager.subprocess.run") as run:
+            dialog = SettingsDialog(manager=self.manager)
+        try:
+            self.assertEqual(
+                dialog.widgets[("audio", "ffmpeg_path")].text(),
+                "C:/Tools/ffmpeg.exe",
+            )
+            self.assertEqual(
+                dialog.widgets[("audio", "ffprobe_path")].text(),
+                "C:/Tools/ffprobe.exe",
+            )
+            run.assert_not_called()
+        finally:
+            dialog.close()
+
+    def test_repeated_open_does_not_duplicate_heavy_initialization(self):
+        with patch.object(self.manager, "diagnostics") as diagnostics:
+            for _ in range(2):
+                dialog = SettingsDialog(manager=self.manager)
+                dialog.show()
+                self.app.processEvents()
+                dialog.close()
+            diagnostics.assert_not_called()
+
+    def test_explicit_diagnostic_and_path_buttons_still_work(self):
+        values = {
+            "Python": "3.x", "SQLite": "3.x", "Mutagen": "1.x",
+            "yt-dlp": "1.x", "FFmpeg": "ffmpeg version",
+            "ffprobe": "ffprobe version", "Spotify auth": "ok",
+            "YouTube API": "ok",
+        }
+        with patch.object(self.manager, "diagnostics", return_value=values) as diagnostics, \
+                patch.object(self.manager, "validate_external", return_value=()) as external:
+            dialog = SettingsDialog(manager=self.manager)
+            try:
+                dialog.diagnostics_refresh_button.click()
+                dialog.external_validation_button.click()
+                diagnostics.assert_called_once_with()
+                external.assert_called_once_with()
+                self.assertEqual(dialog.diagnostic_labels["FFmpeg"].text(), "ffmpeg version")
+            finally:
+                dialog.close()
+
+    def test_constructs_quickly_without_external_calls(self):
+        # Ruime CI-grens; de regressiebescherming zit primair in de call-asserties.
+        started = time.monotonic()
+        with patch.object(self.manager, "diagnostics") as diagnostics:
+            dialog = SettingsDialog(manager=self.manager)
+        elapsed = time.monotonic() - started
+        try:
+            diagnostics.assert_not_called()
+            self.assertLess(elapsed, 2.0)
+            self.assertFalse(hasattr(dialog, "worker"))
         finally:
             dialog.close()
 
