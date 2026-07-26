@@ -112,6 +112,7 @@ class DownloadQueueDialog(QDialog):
         ))
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+        self.table.setSortingEnabled(True)
         self.table.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(self.table, stretch=1)
         buttons = QHBoxLayout()
@@ -145,7 +146,8 @@ class DownloadQueueDialog(QDialog):
     def refresh(self):
         if self._closing:
             return
-        jobs = self.manager.jobs()
+        jobs = self.manager.jobs(limit=1000)
+        self.table.setSortingEnabled(False)
         self.table.setRowCount(len(jobs))
         for row, job in enumerate(jobs):
             values = (
@@ -176,19 +178,19 @@ class DownloadQueueDialog(QDialog):
                 item = QTableWidgetItem(str(value))
                 item.setData(256, job.job_id)
                 self.table.setItem(row, column, item)
-        counts = {status: sum(job.status == status for job in jobs) for status in (
+        total, counts, average = self.manager.queue_statistics()
+        counts = {status: counts.get(status, 0) for status in (
             WAITING, RUNNING, DOWNLOADING, COMPLETED, PROCESSED, RECOVERED, FAILED, CANCELLED,
         )}
         self.summary_label.setText(
-            f"Totale queue: {len(jobs)} | Waiting: {counts[WAITING]} | "
+            f"Totale queue: {total} | getoond: {len(jobs)} | Waiting: {counts[WAITING]} | "
             f"Running: {counts[RUNNING] + counts[DOWNLOADING]} | "
             f"Completed: {counts[COMPLETED] + counts[PROCESSED] + counts[RECOVERED]} | "
             f"Failed: {counts[FAILED]} | "
             f"Cancelled: {counts[CANCELLED]}"
         )
-        self.total_progress.setValue(
-            round(sum(job.progress for job in jobs) / len(jobs)) if jobs else 0
-        )
+        self.total_progress.setValue(average)
+        self.table.setSortingEnabled(True)
 
     def selected_job_ids(self):
         return tuple(dict.fromkeys(

@@ -1,5 +1,6 @@
 from pathlib import Path
 from datetime import datetime
+from time import perf_counter
 
 from database import verkrijg_ontbrekende_rar_items
 from database import verkrijg_rar_inventory_overzicht
@@ -11,6 +12,7 @@ from par_inventory import verkrijg_par_overzicht
 
 
 def maak_rapport(map_pad, database):
+    runtime_started = perf_counter()
 
     reports_map = Path("reports")
     reports_map.mkdir(exist_ok=True)
@@ -425,5 +427,18 @@ def maak_rapport(map_pad, database):
                 f.write(f"{gegevens['relatief_pad']}\n")
 
             f.write("\n")
+
+        integrity_ok, integrity_messages = database.integrity_check()
+        try:
+            database_size = database.pad.stat().st_size
+        except OSError:
+            database_size = 0
+        f.write("Runtime-statistieken\n")
+        f.write("------------------------------\n")
+        f.write(f"Rapportduur: {perf_counter() - runtime_started:.3f} seconden\n")
+        f.write(f"Databasegrootte: {database_size} bytes\n")
+        f.write(f"Database-integriteit: {'OK' if integrity_ok else '; '.join(integrity_messages)}\n")
+        f.write(f"Recovery-items: {recovery_overzicht.get('totaal', len(recovery_items))}\n")
+        f.write("\n")
 
     return rapport

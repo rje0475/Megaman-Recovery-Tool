@@ -1,5 +1,6 @@
 import re
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -50,10 +51,45 @@ class SQLiteDatabase:
 
     def __init__(self, pad=DATABASE_BESTAND):
         self.pad = Path(pad)
-        self.verbinding = sqlite3.connect(self.pad)
+        self.pad.parent.mkdir(parents=True, exist_ok=True)
+        self.verbinding = sqlite3.connect(self.pad, timeout=30)
         self.verbinding.row_factory = sqlite3.Row
         self.verbinding.execute("PRAGMA foreign_keys = ON")
+        self.verbinding.execute("PRAGMA busy_timeout = 30000")
+        self.verbinding.execute("PRAGMA journal_mode = WAL")
         self._maak_tabel()
+
+    @contextmanager
+    def transactie(self, immediate=False):
+        """Atomische transactie met gegarandeerde rollback bij fouten."""
+        if self.verbinding.in_transaction:
+            savepoint = f"sp_{id(self):x}"
+            self.verbinding.execute(f"SAVEPOINT {savepoint}")
+            try:
+                yield self.verbinding
+            except Exception:
+                self.verbinding.execute(f"ROLLBACK TO {savepoint}")
+                self.verbinding.execute(f"RELEASE {savepoint}")
+                raise
+            else:
+                self.verbinding.execute(f"RELEASE {savepoint}")
+            return
+        self.verbinding.execute("BEGIN IMMEDIATE" if immediate else "BEGIN")
+        try:
+            yield self.verbinding
+        except Exception:
+            self.verbinding.rollback()
+            raise
+        else:
+            self.verbinding.commit()
+
+    def integrity_check(self):
+        try:
+            rows = self.verbinding.execute("PRAGMA integrity_check").fetchall()
+        except sqlite3.DatabaseError as error:
+            return False, (str(error),)
+        messages = tuple(row[0] for row in rows)
+        return messages == ("ok",), messages
 
     def _maak_tabel(self):
         self.verbinding.execute(

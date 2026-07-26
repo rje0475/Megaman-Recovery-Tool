@@ -9,7 +9,7 @@ def start_gui(argv=None):
     """Start Qt pas nadat de gebruiker expliciet `--gui` koos."""
 
     try:
-        from PySide6.QtWidgets import QApplication
+        from PySide6.QtWidgets import QApplication, QMessageBox
         from gui.main_window import MegamanMainWindow
     except ImportError as fout:
         raise GuiDependencyFout(
@@ -18,6 +18,12 @@ def start_gui(argv=None):
         ) from fout
 
     app = QApplication.instance() or QApplication(argv or [])
+    from core.reliability import install_global_exception_handler
+    install_global_exception_handler(
+        user_notifier=lambda message: QMessageBox.critical(
+            None, "Onverwachte fout", message
+        )
+    )
     venster = MegamanMainWindow()
     venster.show()
     return app.exec()

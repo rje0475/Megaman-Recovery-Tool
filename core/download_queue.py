@@ -177,28 +177,65 @@ class DownloadQueueManager:
         self.database.verbinding.commit()
         return tuple(created)
 
-    def jobs(self):
+    def jobs(self, limit=None, offset=0):
+        pagination = ""
+        parameters = []
+        if limit is not None:
+            pagination = " LIMIT ? OFFSET ?"
+            parameters = [max(0, int(limit)), max(0, int(offset))]
         rows = self.database.verbinding.execute(
             """SELECT q.*,r.bepaalde_artiest,r.bepaalde_titel,
                       r.selected_youtube_url
             FROM download_queue q JOIN recovery_items r
               ON r.id=q.recovery_item_id
-            ORDER BY q.queue_position,q.created_at"""
+            ORDER BY q.queue_position,q.created_at""" + pagination,
+            parameters,
         ).fetchall()
         return tuple(self._job(row) for row in rows)
+
+    def iter_jobs(self, batch_size=250):
+        offset = 0
+        while True:
+            batch = self.jobs(limit=batch_size, offset=offset)
+            if not batch:
+                return
+            yield from batch
+            offset += len(batch)
+
+    def queue_statistics(self):
+        rows = self.database.verbinding.execute(
+            "SELECT status,COUNT(*) aantal,AVG(progress) gemiddelde FROM download_queue GROUP BY status"
+        ).fetchall()
+        counts = {row["status"]: row["aantal"] for row in rows}
+        total = sum(counts.values())
+        average = (
+            self.database.verbinding.execute(
+                "SELECT COALESCE(AVG(progress),0) FROM download_queue"
+            ).fetchone()[0]
+        )
+        return total, counts, round(average)
 
     def get(self, job_id):
         return next((job for job in self.jobs() if job.job_id == job_id), None)
 
     def dequeue(self):
-        row = self.database.verbinding.execute(
-            """SELECT job_id FROM download_queue
-            WHERE status IN ('WAITING','DOWNLOADED')
-            ORDER BY priority DESC,queue_position LIMIT 1"""
-        ).fetchone()
-        if not row:
-            return None
-        self.transition(row["job_id"], QUEUED, stage="In wachtrij", progress=0)
+        now = self._now()
+        with self.database.transactie(immediate=True) as connection:
+            row = connection.execute(
+                """SELECT job_id,status FROM download_queue
+                WHERE status IN ('WAITING','DOWNLOADED')
+                ORDER BY priority DESC,queue_position LIMIT 1"""
+            ).fetchone()
+            if not row:
+                return None
+            changed = connection.execute(
+                """UPDATE download_queue SET status='QUEUED',progress=0,
+                last_stage='In wachtrij',updated_at=? WHERE job_id=?
+                AND status=?""", (now, row["job_id"], row["status"])
+            ).rowcount
+            if not changed:
+                return None
+        self._log(row["job_id"], row["status"], QUEUED)
         return self.get(row["job_id"])
 
     def transition(

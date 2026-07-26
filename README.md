@@ -504,3 +504,44 @@ aanwezige secrets. **Reset to Defaults** herstelt de ingebouwde defaults.
   "metadata": {}
 }
 ```
+
+## Production hardening (fase 8)
+
+De applicatie initialiseert centraal roterende logging in `logs/`. Iedere regel
+bevat tijdstip, niveau, threadnaam en module. Bekende secretvelden worden voor
+het schrijven geredacteerd. Onverwachte fouten uit zowel de hoofdthread als
+Python-achtergrondthreads krijgen een atomisch JSON-crashrapport onder
+`logs/crash/`; de GUI toont daarbij een korte, niet-technische melding.
+
+SQLite gebruikt foreign keys, WAL, een busy-timeout en expliciete
+transactiecontexten met rollback/savepoints. `integrity_check()` is beschikbaar
+voor diagnostiek en rapporten. Queue-claims gebeuren atomisch met
+`BEGIN IMMEDIATE`, zodat meerdere workers niet dezelfde job kunnen claimen.
+De GUI materialiseert maximaal 1000 queue-rijen tegelijk; totalen en voortgang
+komen uit databaseaggregaties. Backendcode kan grote queues via `iter_jobs()`
+in batches verwerken.
+
+### Architectuur- en moduleoverzicht
+
+- `core/reliability/`: logging, redactie, crashrapporten en exception hooks;
+- `core/settings/`: defaults, JSON-opslag, migraties en validatie;
+- `core/download*` en `core/audio/`: persistente queue, download en processing;
+- `core/metadata/`: Spotify-metadata, artworkcache en atomische finalisatie;
+- `core/spotify/` en `core/youtube/`: providerclients, matching en reviewdata;
+- `gui/`: Qt-widgets, workers en uitsluitend signaalgestuurde GUI-updates;
+- `database.py`: SQLite-schema, migraties, transacties en integrity checks.
+
+### Ontwikkelaarsinformatie
+
+Gebruik voor iedere wijziging een tijdelijke database en injecteer externe
+clients/processen in tests. Schrijf nooit tokens of API-sleutels naar fixtures
+of logs. Nieuwe schema- en settingsvelden moeten niet-destructief migreren.
+Controleer vóór een commit minimaal:
+
+```powershell
+python -m pytest
+python -m compileall -q core gui tests
+python main.py --help
+python main.py --demo
+git diff --check
+```

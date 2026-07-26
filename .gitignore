@@ -27,6 +27,7 @@ Desktop.ini
 
 # Logs
 *.log
+logs/
 
 # Lokale applicatie-instellingen en secrets
 config/settings.json

@@ -4,6 +4,8 @@ import json
 import os
 import shutil
 import subprocess
+from datetime import datetime
+from threading import RLock
 from copy import deepcopy
 from pathlib import Path
 
@@ -19,8 +21,9 @@ class SettingsValidationError(ValueError):
 class SettingsManager:
     def __init__(self, path=None, environment=None, create=True):
         self.path = Path(path or "config/settings.json")
+        self._lock = RLock()
         self.environment = os.environ if environment is None else environment
-        raw = self._read() if self.path.is_file() else {}
+        raw = self._read_or_recover() if self.path.is_file() else {}
         self._data = migrate(raw)
         self._apply_legacy_environment()
         if create and (not self.path.is_file() or raw != self._data):
@@ -31,6 +34,19 @@ class SettingsManager:
             return json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as error:
             raise SettingsValidationError(f"Instellingen kunnen niet worden gelezen: {error}") from error
+
+    def _read_or_recover(self):
+        try:
+            return self._read()
+        except SettingsValidationError:
+            backup = self.path.with_name(
+                f"{self.path.name}.corrupt-{datetime.now():%Y%m%d-%H%M%S}"
+            )
+            try:
+                self.path.replace(backup)
+            except OSError:
+                pass
+            return {}
 
     def _apply_legacy_environment(self):
         mapping = {
@@ -65,18 +81,20 @@ class SettingsManager:
         return deepcopy(self._data[name])
 
     def update_section(self, name, values):
-        candidate = deepcopy(self._data)
-        candidate[name].update(values)
-        self.validate(candidate)
-        self._data = candidate
-        self.save()
+        with self._lock:
+            candidate = deepcopy(self._data)
+            candidate[name].update(values)
+            self.validate(candidate)
+            self._data = candidate
+            self.save()
 
     def save(self):
-        self.validate(self._data)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(self._data, indent=2, ensure_ascii=False), encoding="utf-8")
-        temporary.replace(self.path)
+        with self._lock:
+            self.validate(self._data)
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self.path.with_suffix(".tmp")
+            temporary.write_text(json.dumps(self._data, indent=2, ensure_ascii=False), encoding="utf-8")
+            temporary.replace(self.path)
 
     def reset(self):
         self._data = deepcopy(DEFAULTS)
