@@ -196,6 +196,8 @@ class DownloadQueueTest(unittest.TestCase):
         self.assertIn("retries=0/3", text)
         self.assertIn("fout=testfout", text)
         self.assertIn("downloadstatus=FAILED", text)
+        self.assertIn("processingstatus=—", text)
+        self.assertIn("processed=—", text)
 
 
 if __name__ == "__main__":

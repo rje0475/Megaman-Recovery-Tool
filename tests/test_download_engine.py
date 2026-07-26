@@ -7,6 +7,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEventLoop, QThread, QTimer
 from PySide6.QtWidgets import QApplication
+from PySide6.QtGui import QDesktopServices
+from unittest.mock import patch
 
 from core.download.engine import DownloadEngine
 from core.download.errors import (
@@ -20,8 +22,15 @@ from core.download.models import (
 from core.download.provider import YtDlpDownloadProvider
 from core.download.worker import DownloadQueueWorker
 from core.download_queue import (
-    CANCELLED, COMPLETED, FAILED, WAITING, DownloadQueueManager,
+    CANCELLED, COMPLETED, DOWNLOADED, FAILED, PROCESSED, WAITING,
+    DownloadQueueManager,
 )
+from core.audio.models import (
+    AudioProcessingConfig, AudioProcessingResult, AudioValidationResult,
+    PreparedAudioProcessing,
+)
+from core.audio.errors import FfmpegFailedError
+from core.audio.processor import AudioProcessor
 from database import SQLiteDatabase
 from gui.download_queue import DownloadQueueDialog
 
@@ -60,6 +69,31 @@ class FakeProvider:
         self.cleaned = True
         for path in prepared.workspace.glob("*.part"):
             path.unlink()
+
+
+class FakeAudioProcessor:
+    def prepare(self, job, root):
+        workspace = Path(root) / job.job_id
+        workspace.mkdir(parents=True, exist_ok=True)
+        return PreparedAudioProcessing(
+            job.job_id, Path(job.download_path), workspace,
+            workspace / "processing.tmp.mp3",
+            workspace / "processed_audio.mp3",
+        )
+    def process(self, prepared, progress_callback=None, stage_callback=None):
+        if stage_callback:
+            stage_callback("PROCESSING")
+        prepared.temporary_path.write_bytes(b"processed")
+        if stage_callback:
+            stage_callback("VALIDATING")
+        prepared.temporary_path.replace(prepared.final_path)
+        return AudioProcessingResult(
+            prepared.final_path, "mp3", 9, 10.0, 320000, 44100, 2,
+            "mp3", AudioValidationResult(True), 10.0, "webm", .1,
+        )
+    def recognize_existing(self, prepared, source_duration=None):
+        return self.process(prepared)
+    def cancel(self): pass
 
 
 class DownloadEngineTest(unittest.TestCase):
@@ -123,7 +157,7 @@ class DownloadEngineTest(unittest.TestCase):
         )
         result = engine.execute(job, lambda _job, update: progress.append(update))
         stored = self.manager.get(job.job_id)
-        self.assertEqual(stored.status, COMPLETED)
+        self.assertEqual(stored.status, DOWNLOADED)
         self.assertEqual(stored.download_path, str(result.path))
         self.assertEqual(stored.download_size, 5)
         self.assertGreaterEqual(stored.download_duration, 0)
@@ -133,7 +167,7 @@ class DownloadEngineTest(unittest.TestCase):
         row = self.db.verbinding.execute(
             "SELECT * FROM download_queue WHERE job_id=?", (job.job_id,)
         ).fetchone()
-        self.assertEqual(row["download_status"], "COMPLETED")
+        self.assertEqual(row["download_status"], "DOWNLOADED")
         self.assertIsNotNone(row["download_started_at"])
         self.assertIsNotNone(row["download_finished_at"])
 
@@ -201,7 +235,8 @@ class DownloadEngineTest(unittest.TestCase):
         worker_ref = {}
         provider = FakeProvider(callback=lambda: worker_ref["worker"].request_pause())
         worker = DownloadQueueWorker(
-            self.path, self.root / "temp", provider_factory=lambda: provider
+            self.path, self.root / "temp", provider_factory=lambda: provider,
+            processor_factory=FakeAudioProcessor,
         )
         worker_ref["worker"] = worker
         thread = QThread()
@@ -219,12 +254,13 @@ class DownloadEngineTest(unittest.TestCase):
         self.assertFalse(thread.isRunning())
         self.assertEqual(len(completed), 1)
         statuses = [job.status for job in DownloadQueueManager(self.db).jobs()]
-        self.assertIn(COMPLETED, statuses)
+        self.assertIn(PROCESSED, statuses)
         self.assertIn(WAITING, statuses)
 
     def test_gui_toont_live_downloadprogress_en_ruimt_thread_op(self):
         factory = lambda db_path, temp_root: DownloadQueueWorker(
-            db_path, temp_root, provider_factory=lambda: FakeProvider()
+            db_path, temp_root, provider_factory=lambda: FakeProvider(),
+            processor_factory=FakeAudioProcessor,
         )
         dialog = DownloadQueueDialog(
             database_path=self.path, worker_factory=factory,
@@ -245,10 +281,114 @@ class DownloadEngineTest(unittest.TestCase):
             self.assertIsNone(dialog.worker_thread)
             self.assertEqual(dialog.total_progress.value(), 100)
             self.assertIn("Completed: 2", dialog.summary_label.text())
-            self.assertEqual(dialog.table.item(0, 5).text(), "100%")
+            self.assertEqual(dialog.table.item(0, 7).text(), "100%")
+            self.assertEqual(dialog.table.item(0, 2).text(), "Gereed")
+            self.assertEqual(dialog.table.item(0, 6).text(), "PROCESSED")
             self.assertTrue(dialog.buttons["Start Queue"].isEnabled())
+            dialog.table.selectRow(0)
+            with patch.object(QDesktopServices, "openUrl") as opened:
+                dialog.open_source_folder()
+                dialog.open_processed_folder()
+            self.assertEqual(opened.call_count, 2)
         finally:
             dialog.reject()
+
+    def test_retry_processing_gebruikt_bestaande_download_zonder_provider(self):
+        job = self.manager.dequeue()
+        source = self.root / "downloaded.webm"
+        source.write_bytes(b"source")
+        self.manager.complete_download(job.job_id, source, source.stat().st_size, .1)
+        self.manager.fail_processing(job.job_id, FfmpegFailedError("processing fout"))
+        self.manager.retry_failed()
+
+        def forbidden_provider():
+            raise AssertionError("Downloadprovider mag niet opnieuw worden gebruikt")
+
+        worker = DownloadQueueWorker(
+            self.path, self.root / "temp", provider_factory=forbidden_provider,
+            processor_factory=FakeAudioProcessor,
+        )
+        worker.run()
+        self.assertEqual(self.manager.get(job.job_id).status, PROCESSED)
+        self.assertTrue(source.exists())
+
+    def test_processing_en_validating_worden_hervat_en_tmp_opgeruimd(self):
+        for status in ("PROCESSING", "VALIDATING"):
+            job = next(j for j in self.manager.jobs() if j.status == WAITING)
+            source = self.root / f"{job.job_id}.webm"
+            source.write_bytes(b"source")
+            self.db.verbinding.execute(
+                """UPDATE download_queue SET status=?,download_path=?,
+                download_status='DOWNLOADED' WHERE job_id=?""",
+                (status, str(source), job.job_id),
+            )
+            self.db.verbinding.commit()
+            workspace = self.root / "processed" / job.job_id
+            workspace.mkdir(parents=True)
+            temporary = workspace / "processing.tmp.mp3"
+            temporary.write_bytes(b"partial")
+            restored = DownloadQueueManager(self.db)
+            self.assertEqual(restored.get(job.job_id).status, DOWNLOADED)
+            processor = AudioProcessor(AudioProcessingConfig(), None, None)
+            prepared = processor.prepare(restored.get(job.job_id), self.root / "processed")
+            self.assertFalse(prepared.temporary_path.exists())
+
+    def test_keep_source_false_verwijdert_pas_na_processed(self):
+        worker = DownloadQueueWorker(
+            self.path, self.root / "temp",
+            provider_factory=lambda: FakeProvider(),
+            audio_config=AudioProcessingConfig(keep_source_after_processing=False),
+            processor_factory=FakeAudioProcessor,
+        )
+        worker.run()
+        jobs = DownloadQueueManager(self.db).jobs()
+        self.assertTrue(all(job.status == PROCESSED for job in jobs))
+        self.assertTrue(all(job.source_removed for job in jobs))
+        self.assertTrue(all(not Path(job.download_path).exists() for job in jobs))
+
+    def test_processing_migratiekolommen(self):
+        columns = {
+            row["name"] for row in self.db.verbinding.execute(
+                "PRAGMA table_info(download_queue)"
+            )
+        }
+        self.assertTrue({
+            "processed_path", "processing_status", "processing_error_code",
+            "processing_warning", "source_duration", "source_format",
+        } <= columns)
+
+    def test_bestaand_geldig_processed_bestand_wordt_herkend(self):
+        job = self.manager.jobs()[0]
+        source = self.root / "existing-source.webm"; source.write_bytes(b"source")
+        workspace = self.root / "processed" / job.job_id
+        workspace.mkdir(parents=True)
+        final = workspace / "processed_audio.mp3"; final.write_bytes(b"valid-mp3")
+        self.db.verbinding.execute(
+            """UPDATE download_queue SET status='DOWNLOADED',download_path=?,
+            download_status='DOWNLOADED' WHERE job_id=?""",
+            (str(source), job.job_id),
+        )
+        self.db.verbinding.commit()
+
+        class Recognizer(FakeAudioProcessor):
+            def process(self, *_args, **_kwargs):
+                raise AssertionError("Bestaande geldige uitvoer mag niet worden verwerkt")
+            def recognize_existing(self, prepared, source_duration=None):
+                return AudioProcessingResult(
+                    prepared.final_path, "mp3", prepared.final_path.stat().st_size,
+                    10.0, 320000, 44100, 2, "mp3",
+                    AudioValidationResult(True), 10.0, "webm", .01,
+                )
+
+        worker = DownloadQueueWorker(
+            self.path, self.root / "temp",
+            provider_factory=lambda: (_ for _ in ()).throw(
+                AssertionError("Geen nieuwe download verwacht")
+            ),
+            processor_factory=Recognizer,
+        )
+        worker.run()
+        self.assertEqual(DownloadQueueManager(self.db).get(job.job_id).status, PROCESSED)
 
 
 if __name__ == "__main__":

@@ -34,4 +34,4 @@ class DownloadResult:
     path: Path
     size: int
     duration_seconds: float
-    status: str = "COMPLETED"
+    status: str = "DOWNLOADED"

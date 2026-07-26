@@ -2,7 +2,8 @@
 
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QThread, QTimer, Qt, Signal
+from PySide6.QtCore import QObject, QThread, QTimer, Qt, QUrl, Signal
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QDialog, QHBoxLayout, QLabel, QMessageBox, QProgressBar, QPushButton,
     QTableWidget, QTableWidgetItem, QVBoxLayout,
@@ -10,8 +11,8 @@ from PySide6.QtWidgets import (
 
 from core.download.worker import DownloadQueueWorker
 from core.download_queue import (
-    CANCELLED, COMPLETED, DOWNLOADING, FAILED, PAUSED, PREPARING, QUEUED,
-    RUNNING, WAITING, DownloadQueueManager,
+    CANCELLED, COMPLETED, DOWNLOADING, FAILED, PAUSED, PREPARING, PROCESSED,
+    QUEUED, RUNNING, WAITING, DownloadQueueManager,
 )
 from database import DATABASE_BESTAND, SQLiteDatabase
 
@@ -98,10 +99,13 @@ class DownloadQueueDialog(QDialog):
         )
         self.notice.setWordWrap(True)
         layout.addWidget(self.notice)
-        self.table = QTableWidget(0, 11)
+        self.table = QTableWidget(0, 21)
         self.table.setHorizontalHeaderLabels((
-            "Positie", "Status", "Artiest", "Titel", "Bron", "Voortgang",
-            "KB/s", "ETA", "Grootte", "Retries", "Laatste fout",
+            "Positie", "Status", "Fase", "Artiest", "Titel",
+            "Downloadstatus", "Processingstatus", "Voortgang", "KB/s", "ETA",
+            "Brongrootte", "Bronbestand", "Verwerkt bestand", "Bronduur",
+            "Verwerkte duur", "Codec", "Bitrate", "Sample rate", "Kanalen", "Retries",
+            "Fout / waarschuwing",
         ))
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
@@ -114,6 +118,8 @@ class DownloadQueueDialog(QDialog):
             ("Remove Selected", self.remove_selected),
             ("Clear Completed", self.clear_completed),
             ("Move Up", self.move_up), ("Move Down", self.move_down),
+            ("Open bronmap", self.open_source_folder),
+            ("Open verwerkingsmap", self.open_processed_folder),
         )
         self.buttons = {}
         for text, slot in specs:
@@ -138,26 +144,38 @@ class DownloadQueueDialog(QDialog):
         self.table.setRowCount(len(jobs))
         for row, job in enumerate(jobs):
             values = (
-                job.queue_position, job.status, job.artist, job.title,
-                job.source_type, f"{job.progress}%",
+                job.queue_position, job.status, self._phase(job),
+                job.artist, job.title,
+                job.status if job.status in {DOWNLOADING, "DOWNLOADED"} else "—",
+                job.processing_status or "—", f"{job.progress}%",
                 f"{job.speed_bytes_per_second / 1024:.1f}"
                 if job.speed_bytes_per_second else "—",
                 f"{job.eta_seconds}s" if job.eta_seconds is not None else "—",
                 self._format_size(job.download_size),
+                job.download_path or "—", job.processed_path or "—",
+                self._format_duration(job.source_duration),
+                self._format_duration(job.processed_duration),
+                job.processed_codec or "—",
+                f"{job.processed_bitrate / 1000:.0f} kbps"
+                if job.processed_bitrate else "—",
+                f"{job.processed_sample_rate} Hz"
+                if job.processed_sample_rate else "—",
+                job.processed_channels if job.processed_channels else "—",
                 f"{job.retry_count}/{job.max_retries}",
-                job.error_message or "",
+                job.error_message or job.processing_warning or "",
             )
             for column, value in enumerate(values):
                 item = QTableWidgetItem(str(value))
                 item.setData(256, job.job_id)
                 self.table.setItem(row, column, item)
         counts = {status: sum(job.status == status for job in jobs) for status in (
-            WAITING, RUNNING, DOWNLOADING, COMPLETED, FAILED, CANCELLED,
+            WAITING, RUNNING, DOWNLOADING, COMPLETED, PROCESSED, FAILED, CANCELLED,
         )}
         self.summary_label.setText(
             f"Totale queue: {len(jobs)} | Waiting: {counts[WAITING]} | "
             f"Running: {counts[RUNNING] + counts[DOWNLOADING]} | "
-            f"Completed: {counts[COMPLETED]} | Failed: {counts[FAILED]} | "
+            f"Completed: {counts[COMPLETED] + counts[PROCESSED]} | "
+            f"Failed: {counts[FAILED]} | "
             f"Cancelled: {counts[CANCELLED]}"
         )
         self.total_progress.setValue(
@@ -182,11 +200,11 @@ class DownloadQueueDialog(QDialog):
         thread.setObjectName("DownloadQueueThread")
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
-        worker.job_started.connect(lambda _job_id: self.refresh())
+        worker.job_started.connect(self._job_event)
         worker.job_progress.connect(self._job_progress)
-        worker.job_completed.connect(lambda _job_id: self.refresh())
-        worker.job_failed.connect(lambda *_args: self.refresh())
-        worker.job_cancelled.connect(lambda _job_id: self.refresh())
+        worker.job_completed.connect(self._job_event)
+        worker.job_failed.connect(self._job_event)
+        worker.job_cancelled.connect(self._job_event)
         worker.log_message.connect(self._log)
         worker.queue_completed.connect(self.refresh)
         worker.finished.connect(thread.quit, Qt.ConnectionType.DirectConnection)
@@ -232,6 +250,9 @@ class DownloadQueueDialog(QDialog):
     def _job_progress(self, _job_id, _progress):
         self.refresh()
 
+    def _job_event(self, *_args):
+        self.refresh()
+
     def _log(self, message):
         self.logs.append(message)
 
@@ -248,6 +269,37 @@ class DownloadQueueDialog(QDialog):
         if size >= 1024 * 1024:
             return f"{size / (1024 * 1024):.1f} MB"
         return f"{size / 1024:.1f} KB"
+
+    @staticmethod
+    def _format_duration(seconds):
+        if seconds is None:
+            return "—"
+        return f"{seconds:.2f}s"
+
+    @staticmethod
+    def _phase(job):
+        if job.status in {"PROCESSING"}:
+            return "Verwerken"
+        if job.status in {"VALIDATING"}:
+            return "Valideren"
+        if job.status in {"PROCESSED"}:
+            return "Gereed"
+        if job.status in {DOWNLOADING, PREPARING, QUEUED, RUNNING}:
+            return "Downloaden"
+        return "Wachten"
+
+    def open_source_folder(self):
+        self._open_job_folder("download_path")
+
+    def open_processed_folder(self):
+        self._open_job_folder("processed_path")
+
+    def _open_job_folder(self, attribute):
+        job = self.manager.get(self.selected_job_id())
+        value = getattr(job, attribute, None) if job else None
+        folder = Path(value).parent if value else None
+        if folder and folder.is_dir():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
 
     def _shutdown_worker(self):
         if not self.worker_thread or not self.worker_thread.isRunning():

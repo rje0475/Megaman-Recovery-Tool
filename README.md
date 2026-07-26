@@ -411,7 +411,33 @@ eindlocatie.
 
 De queue toont percentage, downloadsnelheid, ETA en grootte. Pause laat de
 lopende job afmaken en voorkomt een volgende start; Resume pakt de eerstvolgende
-`WAITING`-job. Cancel vraagt de actieve provider veilig te stoppen en verwijdert
-alleen tijdelijke `.part`-bestanden. Na download verifieert de engine dat het
+`WAITING`-job. Cancel vraagt de actieve provider veilig te stoppen en ruimt
+de tijdelijke jobuitvoer op. Na download verifieert de engine dat het
 bronbestand bestaat, groter is dan nul en leesbaar is voordat de status
-`COMPLETED` wordt opgeslagen.
+`DOWNLOADED` wordt opgeslagen.
+
+## Audio Processing Pipeline (fase 5)
+
+Na een geldige brondownload maakt de queue een technisch gevalideerde MP3 in
+`downloads/processed/<job_id>/`. FFmpeg schrijft eerst uitsluitend
+`processing.tmp.mp3`; pas na een geslaagde ffprobe-validatie wordt dit atomisch
+`processed_audio.mp3`. De standaardconfiguratie gebruikt `libmp3lame`, 320 kbps
+CBR, behoudt een geldige sample rate en kanaalindeling van de bron en kopieert
+geen metadata, hoofdstukken, video of thumbnails.
+
+Toolpaden en instellingen zijn lokaal configureerbaar:
+
+```powershell
+$env:FFMPEG_PATH="C:\ffmpeg\bin\ffmpeg.exe"
+$env:FFPROBE_PATH="C:\ffmpeg\bin\ffprobe.exe"
+$env:OUTPUT_AUDIO_FORMAT="mp3"
+$env:MP3_BITRATE_KBPS="320"
+$env:PROCESSING_TIMEOUT_SECONDS="1800"
+$env:KEEP_SOURCE_AFTER_PROCESSING="true"
+```
+
+Zonder expliciete paden worden eerst PATH en daarna de bestaande
+projectconfiguratie gebruikt. Ontbrekende tools leveren een opgeslagen
+jobfout op en laten de brondownload intact. Deze fase schrijft geen ID3-tags,
+voegt geen albumcover toe, bepaalt geen definitieve bestandsnaam, verplaatst
+niets naar weekmappen en markeert geen recovery-item als volledig hersteld.

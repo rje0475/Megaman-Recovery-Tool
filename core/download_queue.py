@@ -4,6 +4,7 @@ import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 
 
 WAITING = "WAITING"
@@ -12,6 +13,10 @@ PREPARING = "PREPARING"
 RUNNING = "RUNNING"
 DOWNLOADING = "DOWNLOADING"
 VERIFYING = "VERIFYING"
+DOWNLOADED = "DOWNLOADED"
+PROCESSING = "PROCESSING"
+VALIDATING = "VALIDATING"
+PROCESSED = "PROCESSED"
 PAUSED = "PAUSED"
 COMPLETED = "COMPLETED"
 FAILED = "FAILED"
@@ -19,7 +24,8 @@ CANCELLED = "CANCELLED"
 SKIPPED = "SKIPPED"
 STATUSES = frozenset({
     WAITING, QUEUED, PREPARING, RUNNING, PAUSED,
-    DOWNLOADING, VERIFYING, COMPLETED, FAILED, CANCELLED, SKIPPED,
+    DOWNLOADING, VERIFYING, DOWNLOADED, PROCESSING, VALIDATING, PROCESSED,
+    COMPLETED, FAILED, CANCELLED, SKIPPED,
 })
 LOGGER = logging.getLogger(__name__)
 
@@ -48,6 +54,19 @@ class DownloadJob:
     download_size: int | None = None
     download_path: str | None = None
     download_duration: float | None = None
+    processed_path: str | None = None
+    processed_size: int | None = None
+    processed_format: str | None = None
+    processed_codec: str | None = None
+    processed_bitrate: int | None = None
+    processed_sample_rate: int | None = None
+    processed_channels: int | None = None
+    processed_duration: float | None = None
+    processing_status: str | None = None
+    processing_warning: str | None = None
+    source_duration: float | None = None
+    source_format: str | None = None
+    source_removed: bool = False
 
 
 class DownloadQueueManager:
@@ -74,6 +93,27 @@ class DownloadQueueManager:
                 WHERE job_id=?""", (now, row["job_id"])
             )
             self._log(row["job_id"], row["status"], "WAITING")
+        self.database.verbinding.commit()
+        rows = self.database.verbinding.execute(
+            """SELECT job_id,status,download_path,processed_path,processing_status
+            FROM download_queue WHERE status IN ('PROCESSING','VALIDATING','COMPLETED')"""
+        ).fetchall()
+        for row in rows:
+            processed = Path(row["processed_path"]) if row["processed_path"] else None
+            source = Path(row["download_path"]) if row["download_path"] else None
+            if (
+                row["processing_status"] == PROCESSED
+                and processed and processed.is_file() and processed.stat().st_size > 0
+            ):
+                status = PROCESSED
+            elif source and source.is_file() and source.stat().st_size > 0:
+                status = DOWNLOADED
+            else:
+                status = WAITING
+            self.database.verbinding.execute(
+                "UPDATE download_queue SET status=?,updated_at=? WHERE job_id=?",
+                (status, now, row["job_id"]),
+            )
         self.database.verbinding.commit()
 
     def enqueue(self, recovery_item_ids=None):
@@ -141,7 +181,8 @@ class DownloadQueueManager:
 
     def dequeue(self):
         row = self.database.verbinding.execute(
-            """SELECT job_id FROM download_queue WHERE status='WAITING'
+            """SELECT job_id FROM download_queue
+            WHERE status IN ('WAITING','DOWNLOADED')
             ORDER BY priority DESC,queue_position LIMIT 1"""
         ).fetchone()
         if not row:
@@ -165,10 +206,10 @@ class DownloadQueueManager:
         finished = row["finished_at"]
         if status in {RUNNING, DOWNLOADING} and not started:
             started = now
-        if status in {COMPLETED, FAILED, CANCELLED, SKIPPED}:
+        if status in {PROCESSED, COMPLETED, FAILED, CANCELLED, SKIPPED}:
             finished = now
         if progress is None:
-            progress = 100 if status == COMPLETED else row["progress"]
+            progress = 100 if status in {PROCESSED, COMPLETED} else row["progress"]
         self.database.verbinding.execute(
             """UPDATE download_queue SET status=?,progress=?,last_stage=?,
             error_code=?,last_error=?,started_at=?,finished_at=?,updated_at=?
@@ -176,12 +217,12 @@ class DownloadQueueManager:
             (status, max(0, min(100, int(progress))), stage,
              error_code, error_message, started, finished, now, job_id),
         )
-        if status in {DOWNLOADING, VERIFYING, COMPLETED, FAILED, CANCELLED}:
+        if status in {DOWNLOADING, VERIFYING, DOWNLOADED, COMPLETED, FAILED, CANCELLED}:
             self.database.verbinding.execute(
                 """UPDATE download_queue SET download_status=?,
                 download_started_at=CASE WHEN ?='DOWNLOADING'
                     THEN COALESCE(download_started_at,?) ELSE download_started_at END,
-                download_finished_at=CASE WHEN ? IN ('COMPLETED','FAILED','CANCELLED')
+                download_finished_at=CASE WHEN ? IN ('DOWNLOADED','COMPLETED','FAILED','CANCELLED')
                     THEN COALESCE(download_finished_at,?) ELSE download_finished_at END
                 WHERE job_id=?""",
                 (status, status, now, status, now, job_id),
@@ -209,11 +250,80 @@ class DownloadQueueManager:
         self.database.verbinding.execute(
             """UPDATE download_queue SET download_path=?,download_size=?,
             download_duration=?,download_started_at=COALESCE(download_started_at,started_at),
-            download_finished_at=?,download_status='COMPLETED' WHERE job_id=?""",
+            download_finished_at=?,download_status='DOWNLOADED' WHERE job_id=?""",
             (str(path), int(size), float(duration), now, job_id),
         )
         self.database.verbinding.commit()
-        return self.transition(job_id, COMPLETED, "Download voltooid", 100)
+        return self.transition(job_id, DOWNLOADED, "Download voltooid", 100)
+
+    def start_processing(self, job_id, source_duration=None):
+        now = self._now()
+        self.database.verbinding.execute(
+            """UPDATE download_queue SET processing_started_at=COALESCE(
+            processing_started_at,?),processing_status='PROCESSING',
+            source_duration=COALESCE(?,source_duration) WHERE job_id=?""",
+            (now, source_duration, job_id),
+        )
+        self.database.verbinding.commit()
+        return self.transition(job_id, PROCESSING, "Audio verwerken", 0)
+
+    def update_processing_progress(self, job_id, update):
+        progress = 0 if update.percent is None else round(update.percent)
+        self.database.verbinding.execute(
+            """UPDATE download_queue SET progress=?,last_stage=?,updated_at=?
+            WHERE job_id=?""",
+            (max(0, min(100, progress)), update.stage, self._now(), job_id),
+        )
+        self.database.verbinding.commit()
+
+    def start_validation(self, job_id):
+        self.database.verbinding.execute(
+            "UPDATE download_queue SET processing_status='VALIDATING' WHERE job_id=?",
+            (job_id,),
+        )
+        self.database.verbinding.commit()
+        return self.transition(job_id, VALIDATING, "Audio valideren", 99)
+
+    def complete_processing(self, job_id, result):
+        now = self._now()
+        warning = "; ".join(result.validation.warnings) or None
+        self.database.verbinding.execute(
+            """UPDATE download_queue SET processed_path=?,processed_size=?,
+            processed_format=?,processed_codec=?,processed_bitrate=?,
+            processed_sample_rate=?,processed_channels=?,processed_duration=?,
+            processing_finished_at=?,processing_status='PROCESSED',
+            processing_error_code=NULL,processing_error_message=NULL,
+            processing_warning=?,source_duration=?,source_format=? WHERE job_id=?""",
+            (str(result.processed_path), result.size, result.format, result.codec,
+             result.bitrate, result.sample_rate, result.channels, result.duration,
+             now, warning, result.source_duration, result.source_format, job_id),
+        )
+        self.database.verbinding.commit()
+        return self.transition(job_id, PROCESSED, "Verwerking voltooid", 100)
+
+    def fail_processing(self, job_id, error):
+        now = self._now()
+        message = str(error)
+        if getattr(error, "stderr", None):
+            message = f"{message}\n{error.stderr}".strip()
+        self.database.verbinding.execute(
+            """UPDATE download_queue SET processing_finished_at=?,
+            processing_status='FAILED',processing_error_code=?,
+            processing_error_message=? WHERE job_id=?""",
+            (now, error.code, message, job_id),
+        )
+        self.database.verbinding.commit()
+        return self.transition(
+            job_id, FAILED, "Audioverwerking mislukt",
+            error_code=error.code, error_message=str(error),
+        )
+
+    def mark_source_removed(self, job_id):
+        self.database.verbinding.execute(
+            "UPDATE download_queue SET source_removed=1,updated_at=? WHERE job_id=?",
+            (self._now(), job_id),
+        )
+        self.database.verbinding.commit()
 
     def fail_download(self, job_id, code, message):
         now = self._now()
@@ -255,7 +365,7 @@ class DownloadQueueManager:
 
     def clear_completed(self):
         cursor = self.database.verbinding.execute(
-            "DELETE FROM download_queue WHERE status='COMPLETED'"
+            "DELETE FROM download_queue WHERE status IN ('COMPLETED','PROCESSED')"
         )
         self.database.verbinding.commit()
         self._renumber()
@@ -331,4 +441,17 @@ class DownloadQueueManager:
             eta_seconds=row["download_eta"], download_size=row["download_size"],
             download_path=row["download_path"],
             download_duration=row["download_duration"],
+            processed_path=row["processed_path"],
+            processed_size=row["processed_size"],
+            processed_format=row["processed_format"],
+            processed_codec=row["processed_codec"],
+            processed_bitrate=row["processed_bitrate"],
+            processed_sample_rate=row["processed_sample_rate"],
+            processed_channels=row["processed_channels"],
+            processed_duration=row["processed_duration"],
+            processing_status=row["processing_status"],
+            processing_warning=row["processing_warning"],
+            source_duration=row["source_duration"],
+            source_format=row["source_format"],
+            source_removed=bool(row["source_removed"]),
         )
