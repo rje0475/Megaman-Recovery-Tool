@@ -563,6 +563,14 @@ class SQLiteDatabase:
                 updated_at TEXT NOT NULL,
                 started_at TEXT,
                 finished_at TEXT,
+                download_path TEXT,
+                download_size INTEGER,
+                download_started_at TEXT,
+                download_finished_at TEXT,
+                download_duration REAL,
+                download_status TEXT,
+                download_speed REAL,
+                download_eta INTEGER,
                 FOREIGN KEY (recovery_item_id) REFERENCES recovery_items(id)
                     ON DELETE CASCADE,
                 FOREIGN KEY (youtube_candidate_id) REFERENCES youtube_candidates(id)
@@ -580,6 +588,22 @@ class SQLiteDatabase:
             """CREATE INDEX IF NOT EXISTS idx_download_queue_status
             ON download_queue(status, priority DESC, queue_position)"""
         )
+        download_queue_kolommen = {
+            rij["name"] for rij in self.verbinding.execute(
+                "PRAGMA table_info(download_queue)"
+            )
+        }
+        download_queue_migraties = {
+            "download_path": "TEXT", "download_size": "INTEGER",
+            "download_started_at": "TEXT", "download_finished_at": "TEXT",
+            "download_duration": "REAL", "download_status": "TEXT",
+            "download_speed": "REAL", "download_eta": "INTEGER",
+        }
+        for kolom, kolomtype in download_queue_migraties.items():
+            if kolom not in download_queue_kolommen:
+                self.verbinding.execute(
+                    f"ALTER TABLE download_queue ADD COLUMN {kolom} {kolomtype}"
+                )
         rar_item_kolommen = {
             rij["name"] for rij in self.verbinding.execute(
                 "PRAGMA table_info(rar_inventory_items)"

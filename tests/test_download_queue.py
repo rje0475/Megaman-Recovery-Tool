@@ -163,8 +163,8 @@ class DownloadQueueTest(unittest.TestCase):
         try:
             self.assertEqual(dialog.table.rowCount(), 3)
             self.assertIn("Totale queue: 3", dialog.summary_label.text())
-            self.assertIn("geen netwerk", dialog.notice.text())
-            dialog.start_queue()
+            self.assertIn("Onbewerkte bronaudio", dialog.notice.text())
+            dialog.simulator.start()
             self.assertTrue(dialog.simulator.active)
             dialog.reject()
             self.assertFalse(dialog.simulator.active)
@@ -195,6 +195,7 @@ class DownloadQueueTest(unittest.TestCase):
         self.assertIn("status=FAILED", text)
         self.assertIn("retries=0/3", text)
         self.assertIn("fout=testfout", text)
+        self.assertIn("downloadstatus=FAILED", text)
 
 
 if __name__ == "__main__":

@@ -324,7 +324,12 @@ def maak_rapport(map_pad, database):
                 f"{job['queue_position']}. {job['job_id']} | "
                 f"{job['bepaalde_artiest'] or ''} - {job['bepaalde_titel'] or ''} | "
                 f"status={job['status']} | retries={job['retries']}/"
-                f"{job['max_retries']} | fout={job['last_error'] or '—'}\n"
+                f"{job['max_retries']} | downloadstatus="
+                f"{job['download_status'] or '—'} | grootte="
+                f"{job['download_size'] if job['download_size'] is not None else '—'} | "
+                f"downloadtijd={job['download_duration'] if job['download_duration'] is not None else '—'} | "
+                f"locatie={job['download_path'] or '—'} | "
+                f"fout={job['last_error'] or '—'}\n"
             )
         f.write("\n")
 

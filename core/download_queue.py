@@ -10,6 +10,8 @@ WAITING = "WAITING"
 QUEUED = "QUEUED"
 PREPARING = "PREPARING"
 RUNNING = "RUNNING"
+DOWNLOADING = "DOWNLOADING"
+VERIFYING = "VERIFYING"
 PAUSED = "PAUSED"
 COMPLETED = "COMPLETED"
 FAILED = "FAILED"
@@ -17,7 +19,7 @@ CANCELLED = "CANCELLED"
 SKIPPED = "SKIPPED"
 STATUSES = frozenset({
     WAITING, QUEUED, PREPARING, RUNNING, PAUSED,
-    COMPLETED, FAILED, CANCELLED, SKIPPED,
+    DOWNLOADING, VERIFYING, COMPLETED, FAILED, CANCELLED, SKIPPED,
 })
 LOGGER = logging.getLogger(__name__)
 
@@ -41,6 +43,11 @@ class DownloadJob:
     artist: str = ""
     title: str = ""
     source_url: str | None = None
+    speed_bytes_per_second: float | None = None
+    eta_seconds: int | None = None
+    download_size: int | None = None
+    download_path: str | None = None
+    download_duration: float | None = None
 
 
 class DownloadQueueManager:
@@ -57,7 +64,8 @@ class DownloadQueueManager:
     def _herstel_onafgeronde_jobs(self):
         now = self._now()
         rows = self.database.verbinding.execute(
-            "SELECT job_id,status FROM download_queue WHERE status='RUNNING'"
+            """SELECT job_id,status FROM download_queue
+            WHERE status IN ('RUNNING','DOWNLOADING','VERIFYING','PREPARING','QUEUED')"""
         ).fetchall()
         for row in rows:
             self.database.verbinding.execute(
@@ -65,7 +73,7 @@ class DownloadQueueManager:
                 last_stage='Hersteld na applicatiestop', updated_at=?
                 WHERE job_id=?""", (now, row["job_id"])
             )
-            self._log(row["job_id"], "RUNNING", "WAITING")
+            self._log(row["job_id"], row["status"], "WAITING")
         self.database.verbinding.commit()
 
     def enqueue(self, recovery_item_ids=None):
@@ -155,7 +163,7 @@ class DownloadQueueManager:
         now = self._now()
         started = row["started_at"]
         finished = row["finished_at"]
-        if status == RUNNING and not started:
+        if status in {RUNNING, DOWNLOADING} and not started:
             started = now
         if status in {COMPLETED, FAILED, CANCELLED, SKIPPED}:
             finished = now
@@ -168,12 +176,56 @@ class DownloadQueueManager:
             (status, max(0, min(100, int(progress))), stage,
              error_code, error_message, started, finished, now, job_id),
         )
+        if status in {DOWNLOADING, VERIFYING, COMPLETED, FAILED, CANCELLED}:
+            self.database.verbinding.execute(
+                """UPDATE download_queue SET download_status=?,
+                download_started_at=CASE WHEN ?='DOWNLOADING'
+                    THEN COALESCE(download_started_at,?) ELSE download_started_at END,
+                download_finished_at=CASE WHEN ? IN ('COMPLETED','FAILED','CANCELLED')
+                    THEN COALESCE(download_finished_at,?) ELSE download_finished_at END
+                WHERE job_id=?""",
+                (status, status, now, status, now, job_id),
+            )
         self.database.verbinding.commit()
         self._log(job_id, row["status"], status)
         return self.get(job_id)
 
     def cancel(self, job_id):
         return self.transition(job_id, CANCELLED, stage="Geannuleerd")
+
+    def update_download_progress(self, job_id, update):
+        self.database.verbinding.execute(
+            """UPDATE download_queue SET progress=?,download_speed=?,
+            download_eta=?,download_size=COALESCE(?,download_size),
+            last_stage='Downloaden',updated_at=? WHERE job_id=?""",
+            (max(0, min(100, round(update.percent))),
+             update.speed_bytes_per_second, update.eta_seconds,
+             update.total_bytes, self._now(), job_id),
+        )
+        self.database.verbinding.commit()
+
+    def complete_download(self, job_id, path, size, duration):
+        now = self._now()
+        self.database.verbinding.execute(
+            """UPDATE download_queue SET download_path=?,download_size=?,
+            download_duration=?,download_started_at=COALESCE(download_started_at,started_at),
+            download_finished_at=?,download_status='COMPLETED' WHERE job_id=?""",
+            (str(path), int(size), float(duration), now, job_id),
+        )
+        self.database.verbinding.commit()
+        return self.transition(job_id, COMPLETED, "Download voltooid", 100)
+
+    def fail_download(self, job_id, code, message):
+        now = self._now()
+        self.database.verbinding.execute(
+            """UPDATE download_queue SET download_finished_at=?,
+            download_status='FAILED' WHERE job_id=?""", (now, job_id)
+        )
+        self.database.verbinding.commit()
+        return self.transition(
+            job_id, FAILED, "Download mislukt",
+            error_code=code, error_message=message,
+        )
 
     def pause(self, job_id=None):
         ids = self._ids(job_id, {WAITING, QUEUED, PREPARING, RUNNING})
@@ -275,4 +327,8 @@ class DownloadQueueManager:
             status=row["status"], source_type=row["source_type"],
             artist=row["bepaalde_artiest"] or "", title=row["bepaalde_titel"] or "",
             source_url=row["selected_youtube_url"],
+            speed_bytes_per_second=row["download_speed"],
+            eta_seconds=row["download_eta"], download_size=row["download_size"],
+            download_path=row["download_path"],
+            download_duration=row["download_duration"],
         )

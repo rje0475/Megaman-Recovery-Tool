@@ -1,20 +1,23 @@
-"""Download Queue-pagina met een lokale statussimulator, zonder downloads."""
+"""Download Queue-pagina voor tijdelijke onbewerkte bronaudio."""
 
-from PySide6.QtCore import QObject, QTimer, Signal
+from pathlib import Path
+
+from PySide6.QtCore import QObject, QThread, QTimer, Qt, Signal
 from PySide6.QtWidgets import (
-    QDialog, QHBoxLayout, QLabel, QProgressBar, QPushButton,
+    QDialog, QHBoxLayout, QLabel, QMessageBox, QProgressBar, QPushButton,
     QTableWidget, QTableWidgetItem, QVBoxLayout,
 )
 
+from core.download.worker import DownloadQueueWorker
 from core.download_queue import (
-    CANCELLED, COMPLETED, FAILED, PAUSED, PREPARING, QUEUED, RUNNING,
-    WAITING, DownloadQueueManager,
+    CANCELLED, COMPLETED, DOWNLOADING, FAILED, PAUSED, PREPARING, QUEUED,
+    RUNNING, WAITING, DownloadQueueManager,
 )
 from database import DATABASE_BESTAND, SQLiteDatabase
 
 
 class DownloadQueueSimulator(QObject):
-    """Simuleert uitsluitend de statusmachine met een QTimer."""
+    """Behoudt de deterministische statussimulator voor geïsoleerde tests."""
 
     changed = Signal()
     completed = Signal()
@@ -66,32 +69,39 @@ class DownloadQueueDialog(QDialog):
     def __init__(
         self, parent=None, database_path=DATABASE_BESTAND,
         database_factory=SQLiteDatabase, simulator_interval_ms=80,
+        worker_factory=DownloadQueueWorker, temp_root=None,
     ):
         super().__init__(parent)
         self.database = database_factory(database_path)
+        self.database_path = database_path
+        self.worker_factory = worker_factory
+        self.temp_root = Path(temp_root or Path.cwd() / "downloads" / "temp")
         self.logs = []
         self.manager = DownloadQueueManager(self.database, self._log)
         self.simulator = DownloadQueueSimulator(
             self.manager, simulator_interval_ms, self
         )
-        self.simulator.changed.connect(self.refresh)
-        self.simulator.completed.connect(self.refresh)
-        self.setWindowTitle("Download Queue — simulatie")
-        self.resize(1050, 620)
+        self.worker_thread = None
+        self.worker = None
+        self._closing = False
+        self.setWindowTitle("Download Queue")
+        self.resize(1180, 640)
         self._build()
         self.refresh()
 
     def _build(self):
         layout = QVBoxLayout(self)
         self.notice = QLabel(
-            "Simulatiemodus: er wordt geen netwerk, yt-dlp, FFmpeg of "
-            "audiobestand gebruikt."
+            "Onbewerkte bronaudio wordt tijdelijk opgeslagen onder "
+            f"{self.temp_root}. Geen conversie, ID3-tags of verplaatsing "
+            "naar de eindlocatie."
         )
+        self.notice.setWordWrap(True)
         layout.addWidget(self.notice)
-        self.table = QTableWidget(0, 8)
+        self.table = QTableWidget(0, 11)
         self.table.setHorizontalHeaderLabels((
-            "Positie", "Status", "Artiest", "Titel", "Bron",
-            "Voortgang", "Retries", "Laatste fout",
+            "Positie", "Status", "Artiest", "Titel", "Bron", "Voortgang",
+            "KB/s", "ETA", "Grootte", "Retries", "Laatste fout",
         ))
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
@@ -122,12 +132,18 @@ class DownloadQueueDialog(QDialog):
         layout.addWidget(close)
 
     def refresh(self):
+        if self._closing:
+            return
         jobs = self.manager.jobs()
         self.table.setRowCount(len(jobs))
         for row, job in enumerate(jobs):
             values = (
                 job.queue_position, job.status, job.artist, job.title,
                 job.source_type, f"{job.progress}%",
+                f"{job.speed_bytes_per_second / 1024:.1f}"
+                if job.speed_bytes_per_second else "—",
+                f"{job.eta_seconds}s" if job.eta_seconds is not None else "—",
+                self._format_size(job.download_size),
                 f"{job.retry_count}/{job.max_retries}",
                 job.error_message or "",
             )
@@ -136,12 +152,13 @@ class DownloadQueueDialog(QDialog):
                 item.setData(256, job.job_id)
                 self.table.setItem(row, column, item)
         counts = {status: sum(job.status == status for job in jobs) for status in (
-            WAITING, RUNNING, COMPLETED, FAILED, CANCELLED,
+            WAITING, RUNNING, DOWNLOADING, COMPLETED, FAILED, CANCELLED,
         )}
         self.summary_label.setText(
             f"Totale queue: {len(jobs)} | Waiting: {counts[WAITING]} | "
-            f"Running: {counts[RUNNING]} | Completed: {counts[COMPLETED]} | "
-            f"Failed: {counts[FAILED]} | Cancelled: {counts[CANCELLED]}"
+            f"Running: {counts[RUNNING] + counts[DOWNLOADING]} | "
+            f"Completed: {counts[COMPLETED]} | Failed: {counts[FAILED]} | "
+            f"Cancelled: {counts[CANCELLED]}"
         )
         self.total_progress.setValue(
             round(sum(job.progress for job in jobs) / len(jobs)) if jobs else 0
@@ -158,24 +175,46 @@ class DownloadQueueDialog(QDialog):
         return ids[0] if ids else None
 
     def start_queue(self):
-        self.simulator.start()
+        if self.worker_thread and self.worker_thread.isRunning():
+            return
+        thread = QThread(self)
+        worker = self.worker_factory(self.database_path, self.temp_root)
+        thread.setObjectName("DownloadQueueThread")
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.job_started.connect(lambda _job_id: self.refresh())
+        worker.job_progress.connect(self._job_progress)
+        worker.job_completed.connect(lambda _job_id: self.refresh())
+        worker.job_failed.connect(lambda *_args: self.refresh())
+        worker.job_cancelled.connect(lambda _job_id: self.refresh())
+        worker.log_message.connect(self._log)
+        worker.queue_completed.connect(self.refresh)
+        worker.finished.connect(thread.quit, Qt.ConnectionType.DirectConnection)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(self._worker_finished)
+        thread.finished.connect(thread.deleteLater)
+        self.worker_thread, self.worker = thread, worker
+        self.buttons["Start Queue"].setEnabled(False)
+        thread.start()
 
     def pause(self):
-        self.manager.pause()
-        self.simulator.stop()
-        self.refresh()
+        if self.worker and self.worker_thread and self.worker_thread.isRunning():
+            self.worker.request_pause()
+            self._log("Pauze aangevraagd; actieve download wordt afgemaakt.")
 
     def resume(self):
-        self.manager.resume()
-        self.simulator.start()
-        self.refresh()
+        self.start_queue()
 
     def retry_failed(self):
         self.manager.retry_failed()
         self.refresh()
 
     def remove_selected(self):
-        self.manager.remove_selected(self.selected_job_ids())
+        for job_id in self.selected_job_ids():
+            if self.worker and job_id == self.worker.current_job_id:
+                self.worker.request_cancel(job_id)
+            else:
+                self.manager.cancel(job_id)
         self.refresh()
 
     def clear_completed(self):
@@ -190,15 +229,53 @@ class DownloadQueueDialog(QDialog):
         if self.manager.move_down(self.selected_job_id()):
             self.refresh()
 
+    def _job_progress(self, _job_id, _progress):
+        self.refresh()
+
     def _log(self, message):
         self.logs.append(message)
 
+    def _worker_finished(self):
+        self.worker_thread = None
+        self.worker = None
+        self.buttons["Start Queue"].setEnabled(True)
+        self.refresh()
+
+    @staticmethod
+    def _format_size(size):
+        if size is None:
+            return "—"
+        if size >= 1024 * 1024:
+            return f"{size / (1024 * 1024):.1f} MB"
+        return f"{size / 1024:.1f} KB"
+
+    def _shutdown_worker(self):
+        if not self.worker_thread or not self.worker_thread.isRunning():
+            return True
+        self.worker.request_stop()
+        if self.worker_thread.wait(5000):
+            return True
+        QMessageBox.information(
+            self, "Download actief",
+            "De actieve download wordt nog veilig gestopt. Probeer zo opnieuw.",
+        )
+        return False
+
     def closeEvent(self, event):
         self.simulator.stop()
+        self._closing = True
+        if not self._shutdown_worker():
+            self._closing = False
+            event.ignore()
+            return
         self.database.sluit()
         super().closeEvent(event)
 
     def done(self, result):
         self.simulator.stop()
+        self._closing = True
+        if not self._shutdown_worker():
+            self._closing = False
+            return
         self.database.sluit()
         super().done(result)

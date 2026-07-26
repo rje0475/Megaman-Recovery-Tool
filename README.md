@@ -396,9 +396,22 @@ geselecteerd en afgerond recovery-item precies eenmaal in de persistente
 downloadqueue. De queue kan worden geordend, gepauzeerd, hervat, geannuleerd
 en na een herstart veilig worden herladen.
 
-**Start Queue is in deze fase uitsluitend een statussimulator.** Met korte
-Qt-timers doorloopt een job `WAITING`, `QUEUED`, `PREPARING`, `RUNNING` en
-`COMPLETED`. Er wordt geen netwerkverbinding gemaakt, geen subprocess gestart,
-geen yt-dlp of FFmpeg aangeroepen en geen audio- of ander mediabestand
-geschreven. Een job die tijdens afsluiten `RUNNING` was, wordt bij de volgende
-start teruggezet naar `WAITING`.
+De queue-infrastructuur bewaart de volledige status en herstelt een tijdens
+afsluiten actieve job bij de volgende start als `WAITING`.
+
+## Download Engine (fase 4)
+
+**Start Queue** voert de voorbereide jobs nu werkelijk sequentieel uit. De
+provider gebruikt de yt-dlp Python-API met `bestaudio/best` en schrijft iedere
+onbewerkte bron naar `downloads/temp/<job_id>/source_audio.<ext>`. Installeer
+hiervoor de bijgewerkte requirements. Er zijn bewust geen yt-dlp-
+postprocessors en geen FFmpeg-instellingen: deze fase converteert niet, maakt
+geen MP3-export, schrijft geen ID3-tags en verplaatst niets naar de
+eindlocatie.
+
+De queue toont percentage, downloadsnelheid, ETA en grootte. Pause laat de
+lopende job afmaken en voorkomt een volgende start; Resume pakt de eerstvolgende
+`WAITING`-job. Cancel vraagt de actieve provider veilig te stoppen en verwijdert
+alleen tijdelijke `.part`-bestanden. Na download verifieert de engine dat het
+bronbestand bestaat, groter is dan nul en leesbaar is voordat de status
+`COMPLETED` wordt opgeslagen.
