@@ -1,4 +1,6 @@
 import argparse
+import io
+import os
 import sys
 from pathlib import Path
 
@@ -18,8 +20,44 @@ BANNER = (
 )
 
 
-def maak_parser():
-    parser = argparse.ArgumentParser(
+def _safe_write(stream, text):
+    """Schrijf best-effort; foutafhandeling mag nooit zelf crashen."""
+    if stream is None:
+        return False
+    try:
+        stream.write(str(text))
+        try:
+            stream.flush()
+        except Exception:
+            pass
+        return True
+    except Exception:
+        return False
+
+
+def _resolve_output(uitvoer=None):
+    if uitvoer is not None:
+        return uitvoer
+    if sys.stdout is not None:
+        return sys.stdout
+    try:
+        return open(os.devnull, "w", encoding="utf-8")
+    except Exception:
+        return io.StringIO()
+
+
+class SafeArgumentParser(argparse.ArgumentParser):
+    def __init__(self, *args, output_stream=None, **kwargs):
+        self.output_stream = output_stream
+        super().__init__(*args, **kwargs)
+
+    def _print_message(self, message, file=None):
+        _safe_write(file if file is not None else self.output_stream, message)
+
+
+def maak_parser(uitvoer=None):
+    parser = SafeArgumentParser(
+        output_stream=_resolve_output(uitvoer),
         prog="python main.py",
         allow_abbrev=False,
         description=(
@@ -111,11 +149,11 @@ def toon_laatste_rapport(
     reports_map=Path("reports"),
     uitvoer=None,
 ):
-    uitvoer = uitvoer or sys.stdout
+    uitvoer = _resolve_output(uitvoer)
     database_pad = Path(database_pad)
     reports_map = Path(reports_map)
     if not database_pad.is_file():
-        uitvoer.write(
+        _safe_write(uitvoer,
             f"Geen normale database gevonden: {database_pad.resolve()}\n"
         )
         return 1
@@ -125,13 +163,13 @@ def toon_laatste_rapport(
         reverse=True,
     ) if reports_map.is_dir() else []
     if not rapporten:
-        uitvoer.write(
+        _safe_write(uitvoer,
             f"Geen rapport gevonden in: {reports_map.resolve()}\n"
         )
         return 1
     rapport = rapporten[0]
-    uitvoer.write(f"Meest recente rapport: {rapport.resolve()}\n\n")
-    uitvoer.write(rapport.read_text(encoding="utf-8"))
+    _safe_write(uitvoer, f"Meest recente rapport: {rapport.resolve()}\n\n")
+    _safe_write(uitvoer, rapport.read_text(encoding="utf-8"))
     return 0
 
 
@@ -146,13 +184,21 @@ def _interactieve_paden(invoer):
 
 
 def main(argv=None, invoer=input, uitvoer=None):
-    uitvoer = uitvoer or sys.stdout
-    args = maak_parser().parse_args(argv)
+    if (
+        argv is None
+        and getattr(sys, "frozen", False)
+        and sys.stdout is None
+        and len(sys.argv) == 1
+    ):
+        argv = ["--gui"]
+    uitvoer = _resolve_output(uitvoer)
+    parser = maak_parser(uitvoer)
+    args = parser.parse_args(argv)
     if (
         args.workspace or args.rar_set or args.skip_par2
         or args.skip_winrar or args.no_spotify
     ) and not args.salvage_rar:
-        maak_parser().error(
+        parser.error(
             "salvage-opties horen bij --salvage-rar"
         )
     try:
@@ -161,9 +207,9 @@ def main(argv=None, invoer=input, uitvoer=None):
             try:
                 return start_gui()
             except GuiDependencyFout as fout:
-                uitvoer.write(f"FOUT: {fout}\n")
+                _safe_write(uitvoer, f"FOUT: {fout}\n")
                 return 1
-        uitvoer.write(BANNER + "\n")
+        _safe_write(uitvoer, BANNER + "\n")
         if args.demo:
             from tools.create_demo_recovery_test import voer_demo_uit
             voer_demo_uit(uitvoer=uitvoer)
@@ -222,13 +268,13 @@ def main(argv=None, invoer=input, uitvoer=None):
         AnalyseFout, ExtractieFout, Par2RepairFout, SpotifyZoekFout,
         SalvageFout, OSError, ValueError
     ) as fout:
-        uitvoer.write(f"FOUT: {fout}\n")
+        _safe_write(uitvoer, f"FOUT: {fout}\n")
         return 1
     except KeyboardInterrupt:
-        uitvoer.write("\nAfgebroken door gebruiker.\n")
+        _safe_write(uitvoer, "\nAfgebroken door gebruiker.\n")
         return 130
     except Exception as fout:
-        uitvoer.write(
+        _safe_write(uitvoer,
             f"FOUT: de analyse kon niet worden voltooid: {fout}\n"
         )
         return 1
