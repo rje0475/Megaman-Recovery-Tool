@@ -33,3 +33,6 @@ logs/
 config/settings.json
 downloads/
 Recovered/
+build/
+dist/
+build-output.txt

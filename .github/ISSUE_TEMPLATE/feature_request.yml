@@ -1,0 +1,16 @@
+name: Feature request
+description: Stel een afgebakende verbetering voor
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes: {label: Probleem, description: Welk gebruikersprobleem lost dit op?}
+    validations: {required: true}
+  - type: textarea
+    id: solution
+    attributes: {label: Voorgestelde oplossing}
+    validations: {required: true}
+  - type: textarea
+    id: safety
+    attributes: {label: Veiligheid en compatibiliteit, description: Gevolgen voor bronbestanden, database en privacy.}

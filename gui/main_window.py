@@ -30,6 +30,8 @@ from gui.workflow import (
 from gui.recovery_review import PlaylistResultDialog, RecoveryReviewDialog
 from gui.workers import WorkflowWorker
 from gui.settings_dialog import SettingsDialog
+from gui.release_dialogs import AboutDialog, HealthCheckDialog
+from core.release import BackupError, ProjectBackupManager
 
 
 STAGE_SYMBOLS = {
@@ -93,11 +95,52 @@ class MegamanMainWindow(QMainWindow):
         self._reset_workflow()
 
     def _bouw_menu(self):
+        bestand = self.menuBar().addMenu("File")
+        backup = bestand.addAction("Backup Project")
+        backup.triggered.connect(self._backup_project)
+        restore = bestand.addAction("Restore Project")
+        restore.triggered.connect(self._restore_project)
         action = self.menuBar().addAction("Settings")
         action.triggered.connect(self._open_settings)
+        tools = self.menuBar().addMenu("Tools")
+        tools.addAction("Health Check").triggered.connect(
+            lambda: HealthCheckDialog(self).exec()
+        )
+        tools.addAction("Self Test").triggered.connect(
+            lambda: HealthCheckDialog(self, self_test=True).exec()
+        )
+        help_menu = self.menuBar().addMenu("Help")
+        help_menu.addAction("About").triggered.connect(
+            lambda: AboutDialog(self).exec()
+        )
 
     def _open_settings(self):
         SettingsDialog(self).exec()
+
+    def _backup_project(self):
+        target, _ = QFileDialog.getSaveFileName(
+            self, "Backup Project", "megaman-backup.zip", "ZIP (*.zip)"
+        )
+        if not target: return
+        try:
+            result = ProjectBackupManager().create(target)
+        except BackupError as error:
+            QMessageBox.warning(self, "Backup mislukt", str(error)); return
+        QMessageBox.information(self, "Backup voltooid", f"Backup opgeslagen:\n{result.path}")
+
+    def _restore_project(self):
+        if self.workflow_running:
+            QMessageBox.warning(self, "Restore geblokkeerd", "Wacht tot de workflow is voltooid.")
+            return
+        source, _ = QFileDialog.getOpenFileName(self, "Restore Project", "", "ZIP (*.zip)")
+        if not source: return
+        if QMessageBox.question(self, "Restore Project", "Database en settings herstellen? Bestaande bestanden krijgen eerst een backup.") != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            restored = ProjectBackupManager().restore(source)
+        except BackupError as error:
+            QMessageBox.warning(self, "Restore mislukt", str(error)); return
+        QMessageBox.information(self, "Restore voltooid", "Hersteld:\n" + "\n".join(restored))
 
     def _bouw_interface(self):
         centraal = QWidget()

@@ -545,3 +545,71 @@ python main.py --help
 python main.py --demo
 git diff --check
 ```
+
+## Installatie voor eindgebruikers
+
+Download bij een release het Windows-artifact en start
+`MegamanRecoveryTool.exe`. Voor broninstallatie:
+
+```powershell
+git clone https://github.com/rje0475/Megaman-Recovery-Tool.git
+cd "Megaman Recovery Tool"
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python main.py --gui
+```
+
+WinRAR/RAR, 7-Zip, FFmpeg en ffprobe blijven externe tools en worden via
+**Settings** geconfigureerd. Spotify-tokens worden apart van `settings.json`
+opgeslagen.
+
+## Releasebeheer en backup
+
+`python main.py --version` toont de centrale Semantic Version, build en commit.
+Gebruik **File → Backup Project** voor een ZIP met database en settings;
+downloads, caches en tijdelijke bestanden worden nooit meegenomen. Restore
+maakt vóór overschrijven een lokale pre-restorekopie. **Tools → Health Check**
+en **Self Test** zijn volledig diagnostisch en wijzigen geen recoverydata.
+
+Een lokale windowed build maken:
+
+```powershell
+python -m pip install -r requirements-build.txt
+python -m PyInstaller --clean --noconfirm megaman_recovery.spec
+```
+
+Uitvoer: `dist/MegamanRecoveryTool.exe`.
+
+## Screenshots
+
+> Plaatsaanduiding: hoofdworkflow met voortgang en herstelstatistieken.
+
+> Plaatsaanduiding: Recovery Review met Spotify- en YouTube-kandidaten.
+
+> Plaatsaanduiding: Settings, Diagnostics en Project Health Check.
+
+## Veelgestelde vragen
+
+**Betekent NOT_REPAIRABLE dat niets gered kan worden?**  Nee. De workflow
+probeert daarna WinRAR/RAR en 7-Zip als aanvullende salvagebronnen.
+
+**Worden originele RAR-bestanden gewijzigd?**  Nee. Recovery en extractie
+gebruiken afzonderlijke workspaces en uitvoermappen.
+
+**Zitten downloads in een projectbackup?**  Nee. Alleen database, settings en
+optioneel logs worden opgenomen.
+
+**Waarom wordt een Spotify-resultaat niet automatisch gekozen?**  Bij twijfel
+is een gemiste match veiliger dan een verkeerde match; beoordeel het item in
+Recovery Review.
+
+## Troubleshooting
+
+- Start **Tools → Health Check** en controleer FFmpeg, ffprobe en schrijfrechten.
+- Controleer `logs/megaman-recovery.log`; deel alleen geredacteerde regels.
+- Bij een onverwachte fout staat een JSON-rapport in `logs/crash/`.
+- Een corrupte `settings.json` wordt hernoemd naar `settings.json.corrupt-*` en
+  automatisch vervangen door geldige defaults.
+- Gebruik bij databaseproblemen eerst Backup Project en controleer daarna de
+  gerapporteerde SQLite-integriteitsstatus.

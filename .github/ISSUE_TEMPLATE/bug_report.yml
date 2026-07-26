@@ -1,0 +1,20 @@
+name: Bug report
+description: Meld een reproduceerbaar probleem
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: textarea
+    id: description
+    attributes: {label: Beschrijving, description: Wat ging er mis?}
+    validations: {required: true}
+  - type: textarea
+    id: steps
+    attributes: {label: Reproduceerstappen, description: Geef minimale veilige stappen zonder secrets.}
+    validations: {required: true}
+  - type: input
+    id: version
+    attributes: {label: Versie, placeholder: "python main.py --version"}
+    validations: {required: true}
+  - type: textarea
+    id: diagnostics
+    attributes: {label: Diagnostiek, description: Voeg geredacteerde Health Check-uitvoer toe.}

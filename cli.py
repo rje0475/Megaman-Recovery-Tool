@@ -8,6 +8,7 @@ from par2_repair import Par2RepairFout
 from rar_extractor import ExtractieFout
 from spotify_smart import SpotifyZoekFout
 from core.salvage_workflow import SalvageFout
+from core.version import VersionInfo
 
 
 BANNER = (
@@ -41,6 +42,9 @@ def maak_parser():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     acties = parser.add_mutually_exclusive_group()
+    parser.add_argument(
+        "--version", action="version", version=VersionInfo.current().display
+    )
     acties.add_argument(
         "--salvage-rar",
         metavar="MAP",
