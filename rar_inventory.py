@@ -39,7 +39,10 @@ class RarListingResultaat:
 
 def groepeer_rar_sets(rar_map):
     """
-    Groepeer multipart RAR-volumes rond ieder bestaand .part01.rar-bestand.
+    Groepeer multipart RAR-volumes rond ieder bestaand eerste part-volume.
+
+    De setnaam en breedte van het partnummer worden uit de bestandsnaam
+    afgeleid; part1.rar, part01.rar en part001.rar zijn dus allemaal geldig.
     """
 
     rar_map = Path(rar_map)
@@ -75,7 +78,7 @@ def groepeer_rar_sets(rar_map):
         startkandidaten = [
             bestand
             for deel, deeltekst, bestand in volumes
-            if deel == 1 and deeltekst == "01"
+            if deel == 1
         ]
 
         if not startkandidaten:
@@ -89,7 +92,7 @@ def groepeer_rar_sets(rar_map):
             startbestand.relative_to(rar_map)
         )
         basis = re.sub(
-            r"(?i)\.part01\.rar$",
+            r"(?i)\.part0*1\.rar$",
             "",
             relatief_start
         )

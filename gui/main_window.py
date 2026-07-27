@@ -1,13 +1,16 @@
-"""Hoofdvenster dat bestaande Megaman-kernfuncties orkestreert."""
+"""Opgeruimd hoofdvenster voor één begeleide recoveryworkflow."""
 
+import logging
+import re
+import time
+from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QDesktopServices, QTextCursor
+from PySide6.QtCore import QCoreApplication, QElapsedTimer, QThread, QUrl, Qt
+from PySide6.QtGui import QCloseEvent, QDesktopServices, QTextCursor
 from PySide6.QtWidgets import (
-    QComboBox,
-    QDialog,
     QFileDialog,
+    QDialog,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -17,503 +20,621 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
-    QTableWidget,
-    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
-from analyse import voer_analyse
-from database import DATABASE_BESTAND, SQLiteDatabase
-from rar_extractor import voer_extractie_uit
+from gui.workflow import (
+    RecoveryGuiWorkflow,
+    WORKFLOW_STAGES,
+    bepaal_recovery_setnaam,
+)
+from gui.recovery_review import PlaylistResultDialog, RecoveryReviewDialog
+from gui.workers import WorkflowWorker
+from gui.settings_dialog import SettingsDialog
+from gui.release_dialogs import AboutDialog, HealthCheckDialog
+from core.release import BackupError, ProjectBackupManager
 
-from gui.workers import ActionWorker
-from spotify_smart import (
-    kies_kandidaat,
-    markeer_geen_kandidaat,
-    voer_spotify_smart_uit,
+
+LOGGER = logging.getLogger(__name__)
+
+
+STAGE_SYMBOLS = {
+    "wachtend": "○",
+    "actief": "▶",
+    "voltooid": "✓",
+    "overgeslagen": "—",
+    "mislukt": "✗",
+}
+_GEVOELIGE_LOGREGEL = re.compile(
+    r"(?i)(accounts\.spotify\.com/authorize|"
+    r"client[_ -]?secret|access[_ -]?token|refresh[_ -]?token|"
+    r"authorization[_ -]?code)"
 )
 
 
-STATISTIEKEN = (
-    ("mp3", "Gevonden MP3-bestanden"),
-    ("rar", "Gevonden RAR-sets"),
-    ("par2", "Gevonden PAR2-datasets"),
-    ("complete", "COMPLETE"),
-    ("repairable", "REPAIRABLE"),
-    ("not_repairable", "NOT_REPAIRABLE"),
-)
-
-
-def _voer_reparatie_uit(map_pad, uitvoer=None):
-    try:
-        from par2_repair import voer_par2_reparatie_uit
-    except ImportError as fout:
-        raise RuntimeError(
-            "PAR2-reparatie is in deze versie niet beschikbaar."
-        ) from fout
-    return voer_par2_reparatie_uit(map_pad, uitvoer=uitvoer)
-
-
-def _toon_rapport(uitvoer=None):
-    from cli import toon_laatste_rapport
-    code = toon_laatste_rapport(uitvoer=uitvoer)
-    if code:
-        raise RuntimeError("Er is geen rapport beschikbaar.")
-    return code
-
-
-def lees_statistieken(database_pad=DATABASE_BESTAND):
-    leeg = {sleutel: 0 for sleutel, _ in STATISTIEKEN}
-    database_pad = Path(database_pad)
-    if not database_pad.is_file():
-        return leeg
-    database = SQLiteDatabase(database_pad)
-    try:
-        mp3 = database.verbinding.execute(
-            "SELECT COUNT(*) AS aantal FROM mp3_bestanden WHERE bestaat = 1"
-        ).fetchone()["aantal"]
-        rar = database.verbinding.execute(
-            "SELECT COUNT(*) AS aantal FROM rar_sets WHERE actief = 1"
-        ).fetchone()["aantal"]
-        par = database.verbinding.execute(
-            """
-            SELECT
-              SUM(CASE WHEN aantal_par_bestanden > 0 THEN 1 ELSE 0 END) par2,
-              SUM(CASE WHEN status = 'COMPLETE' THEN 1 ELSE 0 END) complete,
-              SUM(CASE WHEN status = 'REPAIRABLE' THEN 1 ELSE 0 END)
-                repairable,
-              SUM(CASE WHEN status = 'NOT_REPAIRABLE' THEN 1 ELSE 0 END)
-                not_repairable
-            FROM par_inventory
-            """
-        ).fetchone()
-        return {
-            "mp3": mp3 or 0,
-            "rar": rar or 0,
-            "par2": par["par2"] or 0,
-            "complete": par["complete"] or 0,
-            "repairable": par["repairable"] or 0,
-            "not_repairable": par["not_repairable"] or 0,
-        }
-    finally:
-        database.sluit()
+def spotify_playlist_url(playlist_id):
+    playlist_id = str(playlist_id or "").strip()
+    return (
+        f"https://open.spotify.com/playlist/{playlist_id}"
+        if playlist_id else None
+    )
 
 
 class MegamanMainWindow(QMainWindow):
     def __init__(
         self,
-        worker_factory=ActionWorker,
-        statistics_reader=lees_statistieken,
+        workflow_factory=RecoveryGuiWorkflow,
+        worker_factory=WorkflowWorker,
+        thread_factory=QThread,
+        set_name_resolver=bepaal_recovery_setnaam,
+        review_factory=RecoveryReviewDialog,
+        result_factory=PlaylistResultDialog,
     ):
         super().__init__()
+        self.workflow_factory = workflow_factory
         self.worker_factory = worker_factory
-        self.statistics_reader = statistics_reader
-        self.worker = None
+        self.thread_factory = thread_factory
+        self.set_name_resolver = set_name_resolver
+        self.review_factory = review_factory
+        self.result_factory = result_factory
+        self.workflow_thread = None
+        self.workflow_worker = None
+        self.workflow_running = False
+        self.thread_finished_count = 0
+        self._worker_done = False
+        self._thread_done = False
+        self.playlist_id = None
+        self.playlist_url = None
+        self.review_dialog = None
+        self.result_dialog = None
+        self.review_active = False
+        self._last_summary = None
+        self._last_log = None
+        self._progress_timer = QElapsedTimer()
+        self._last_progress_percent = -1
         self.setWindowTitle("Megaman Recovery Tool")
-        self.resize(900, 650)
+        self.resize(860, 720)
         self._bouw_interface()
-        self.vernieuw_statistieken()
+        self._bouw_menu()
+        self._reset_workflow()
+
+    def _bouw_menu(self):
+        bestand = self.menuBar().addMenu("File")
+        backup = bestand.addAction("Backup Project")
+        backup.triggered.connect(self._backup_project)
+        restore = bestand.addAction("Restore Project")
+        restore.triggered.connect(self._restore_project)
+        action = self.menuBar().addAction("&Settings")
+        action.triggered.connect(self._open_settings)
+        tools = self.menuBar().addMenu("Tools")
+        tools.addAction("Health Check").triggered.connect(
+            lambda: HealthCheckDialog(self).exec()
+        )
+        tools.addAction("Self Test").triggered.connect(
+            lambda: HealthCheckDialog(self, self_test=True).exec()
+        )
+        help_menu = self.menuBar().addMenu("Help")
+        help_menu.addAction("About").triggered.connect(
+            lambda: AboutDialog(self).exec()
+        )
+
+    def _open_settings(self):
+        started = time.monotonic()
+        LOGGER.info("Settings startup: settings action triggered; elapsed_ms=0.0")
+        dialog = SettingsDialog(self, action_started_at=started)
+        elapsed = (time.monotonic() - started) * 1000
+        LOGGER.info("Settings startup: exec() aangeroepen; elapsed_ms=%.1f", elapsed)
+        dialog.exec()
+
+    def _backup_project(self):
+        target, _ = QFileDialog.getSaveFileName(
+            self, "Backup Project", "megaman-backup.zip", "ZIP (*.zip)"
+        )
+        if not target: return
+        try:
+            result = ProjectBackupManager().create(target)
+        except BackupError as error:
+            QMessageBox.warning(self, "Backup mislukt", str(error)); return
+        QMessageBox.information(self, "Backup voltooid", f"Backup opgeslagen:\n{result.path}")
+
+    def _restore_project(self):
+        if self.workflow_running:
+            QMessageBox.warning(self, "Restore geblokkeerd", "Wacht tot de workflow is voltooid.")
+            return
+        source, _ = QFileDialog.getOpenFileName(self, "Restore Project", "", "ZIP (*.zip)")
+        if not source: return
+        if QMessageBox.question(self, "Restore Project", "Database en settings herstellen? Bestaande bestanden krijgen eerst een backup.") != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            restored = ProjectBackupManager().restore(source)
+        except BackupError as error:
+            QMessageBox.warning(self, "Restore mislukt", str(error)); return
+        QMessageBox.information(self, "Restore voltooid", "Hersteld:\n" + "\n".join(restored))
 
     def _bouw_interface(self):
         centraal = QWidget()
         layout = QVBoxLayout(centraal)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
 
-        maprij = QHBoxLayout()
+        layout.addWidget(QLabel("Muziekmap:"))
+        bronrij = QHBoxLayout()
         self.map_invoer = QLineEdit()
-        self.map_invoer.setPlaceholderText("Selecteer een downloadmap")
-        self.bladeren_knop = QPushButton("Bladeren")
-        self.bladeren_knop.clicked.connect(self._bladeren)
-        maprij.addWidget(self.map_invoer)
-        maprij.addWidget(self.bladeren_knop)
-        layout.addLayout(maprij)
-
-        actierij = QHBoxLayout()
-        self.analyseren_knop = QPushButton("Analyseren")
-        self.repareren_knop = QPushButton("Repareren")
-        self.uitpakken_knop = QPushButton("Uitpakken")
-        self.rapport_knop = QPushButton("Rapport tonen")
-        self.actieknoppen = (
-            self.analyseren_knop, self.repareren_knop,
-            self.uitpakken_knop, self.rapport_knop,
+        self.map_invoer.setReadOnly(True)
+        self.map_invoer.setPlaceholderText(
+            "Selecteer een bronmap met RAR/PAR2-bestanden"
         )
-        for knop in self.actieknoppen:
-            actierij.addWidget(knop)
-        layout.addLayout(actierij)
+        self.bladeren_knop = QPushButton("Bladeren…")
+        self.bladeren_knop.clicked.connect(self._bladeren)
+        bronrij.addWidget(self.map_invoer, stretch=1)
+        bronrij.addWidget(self.bladeren_knop)
+        layout.addLayout(bronrij)
 
-        self.analyseren_knop.clicked.connect(self._analyseer)
-        self.repareren_knop.clicked.connect(self._repareer)
-        self.uitpakken_knop.clicked.connect(self._pak_uit)
-        self.rapport_knop.clicked.connect(self._rapport)
+        setrij = QHBoxLayout()
+        setrij.addWidget(QLabel("Recovery-set:"))
+        self.recovery_set_label = QLabel("Nog niet bepaald")
+        self.recovery_set_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        setrij.addWidget(self.recovery_set_label, stretch=1)
+        layout.addLayout(setrij)
 
-        statistieken = QGridLayout()
-        self.statistiek_labels = {}
-        for index, (sleutel, titel) in enumerate(STATISTIEKEN):
-            statistieken.addWidget(QLabel(titel + ":"), index // 3, 2 * (index % 3))
-            waarde = QLabel("0")
-            waarde.setAlignment(Qt.AlignmentFlag.AlignRight)
-            statistieken.addWidget(waarde, index // 3, 2 * (index % 3) + 1)
-            self.statistiek_labels[sleutel] = waarde
-        layout.addLayout(statistieken)
-        self._bouw_spotify(layout)
+        layout.addWidget(QLabel("Workflow"))
+        stappen = QGridLayout()
+        stappen.setHorizontalSpacing(24)
+        self.stage_labels = {}
+        for index, stage in enumerate(WORKFLOW_STAGES):
+            label = QLabel()
+            self.stage_labels[stage] = label
+            stappen.addWidget(label, index // 2, index % 2)
+        layout.addLayout(stappen)
+
+        fasegrid = QGridLayout()
+        fasegrid.addWidget(QLabel("Huidige stap:"), 0, 0)
+        self.huidige_stap_label = QLabel("Geen")
+        fasegrid.addWidget(self.huidige_stap_label, 0, 1)
+        fasegrid.addWidget(QLabel("Huidige activiteit:"), 1, 0)
+        self.huidige_activiteit_label = QLabel("Wachten op Start")
+        self.huidige_activiteit_label.setWordWrap(True)
+        fasegrid.addWidget(self.huidige_activiteit_label, 1, 1)
+        layout.addLayout(fasegrid)
 
         self.voortgang = QProgressBar()
         self.voortgang.setRange(0, 100)
+        self.voortgang.setFormat("%p%")
         layout.addWidget(self.voortgang)
-        self.statusregel = QLabel("Gereed")
-        layout.addWidget(self.statusregel)
+
+        statistieken = QGridLayout()
+        self.live_labels = {}
+        velden = (
+            ("files", "Bestanden"),
+            ("ok", "OK"),
+            ("ffmpeg", "FFmpeg-fouten"),
+            ("zero", "0-byte"),
+            ("spotify", "Spotify verwerkt"),
+            ("matched", "MATCHED"),
+            ("low", "LOW_CONFIDENCE"),
+            ("manual", "MANUAL_REVIEW"),
+            ("not_found", "NOT_FOUND"),
+            ("errors", "Technische fouten"),
+        )
+        for index, (key, tekst) in enumerate(velden):
+            rij, kolom = divmod(index, 5)
+            blok = QHBoxLayout()
+            blok.addWidget(QLabel(f"{tekst}:"))
+            waarde = QLabel("—")
+            waarde.setObjectName(f"live_{key}")
+            blok.addWidget(waarde)
+            blok.addStretch(1)
+            statistieken.addLayout(blok, rij, kolom)
+            self.live_labels[key] = waarde
+        layout.addLayout(statistieken)
+
+        layout.addWidget(QLabel("Log"))
         self.logvenster = QPlainTextEdit()
         self.logvenster.setReadOnly(True)
+        self.logvenster.document().setMaximumBlockCount(1000)
         layout.addWidget(self.logvenster, stretch=1)
+
+        self.eindoverzicht = QLabel(
+            "Eindoverzicht verschijnt na de workflow."
+        )
+        self.eindoverzicht.setWordWrap(True)
+        self.eindoverzicht.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        layout.addWidget(self.eindoverzicht)
+
+        knoppen = QHBoxLayout()
+        knoppen.addStretch(1)
+        self.start_knop = QPushButton("Start")
+        self.start_knop.clicked.connect(self._start_workflow)
+        self.playlist_knop = QPushButton("Spotify-playlist openen")
+        self.playlist_knop.setEnabled(False)
+        self.playlist_knop.clicked.connect(self._open_playlist)
+        knoppen.addWidget(self.start_knop)
+        knoppen.addWidget(self.playlist_knop)
+        knoppen.addStretch(1)
+        layout.addLayout(knoppen)
+
+        self.statusregel = QLabel("Gereed")
+        layout.addWidget(self.statusregel)
         self.setCentralWidget(centraal)
 
-    def _bouw_spotify(self, layout):
-        layout.addWidget(QLabel("Spotify-kandidaten"))
-        rij = QHBoxLayout()
-        self.spotify_filter = QComboBox()
-        self.spotify_filter.addItems([
-            "Alles", "FOUND", "AMBIGUOUS", "NOT_FOUND",
-            "INSUFFICIENT_IDENTITY", "MANUAL", "REVIEWED_NONE",
-        ])
-        self.spotify_zoeken_knop = QPushButton("Spotify zoeken")
-        self.spotify_retry_knop = QPushButton(
-            "Mislukte resultaten opnieuw proberen"
-        )
-        self.kandidaten_knop = QPushButton("Kandidaten bekijken")
-        self.spotify_openen_knop = QPushButton(
-            "Gekozen resultaat openen in Spotify"
-        )
-        self.geen_kandidaat_knop = QPushButton(
-            "Markeren als geen juiste kandidaat"
-        )
-        for widget in (
-            self.spotify_filter, self.spotify_zoeken_knop,
-            self.spotify_retry_knop, self.kandidaten_knop,
-            self.spotify_openen_knop, self.geen_kandidaat_knop,
-        ):
-            rij.addWidget(widget)
-        layout.addLayout(rij)
-        self.spotify_tabel = QTableWidget(0, 9)
-        self.spotify_tabel.setHorizontalHeaderLabels([
-            "Lokaal bestand", "Oorspronkelijke artiest",
-            "Oorspronkelijke titel", "Lokale versie",
-            "Spotify-artiest", "Spotify-titel", "Spotify-versie",
-            "Score", "Status",
-        ])
-        layout.addWidget(self.spotify_tabel)
-        self.spotify_statistieken = QLabel(
-            "Te beoordelen: 0 | FOUND: 0 | AMBIGUOUS: 0 | NOT_FOUND: 0 | "
-            "INSUFFICIENT_IDENTITY: 0 | MANUAL: 0 | REVIEWED_NONE: 0"
-        )
-        layout.addWidget(self.spotify_statistieken)
-        self.actieknoppen += (
-            self.spotify_zoeken_knop, self.spotify_retry_knop,
-            self.kandidaten_knop, self.spotify_openen_knop,
-            self.geen_kandidaat_knop,
-        )
-        self.spotify_filter.currentTextChanged.connect(
-            lambda _: self.vernieuw_spotify()
-        )
-        self.spotify_zoeken_knop.clicked.connect(
-            lambda: self._spotify_zoek(False)
-        )
-        self.spotify_retry_knop.clicked.connect(
-            lambda: self._spotify_zoek(True)
-        )
-        self.kandidaten_knop.clicked.connect(self._toon_kandidaten)
-        self.spotify_openen_knop.clicked.connect(self._open_spotify)
-        self.geen_kandidaat_knop.clicked.connect(self._geen_kandidaat)
-
     def _bladeren(self):
-        map_pad = QFileDialog.getExistingDirectory(
-            self, "Selecteer een map", self.map_invoer.text()
+        gekozen = QFileDialog.getExistingDirectory(
+            self, "Selecteer een bronmap", self.map_invoer.text()
         )
-        if map_pad:
-            self.map_invoer.setText(map_pad)
+        if not gekozen:
+            return
+        self.map_invoer.setText(gekozen)
+        try:
+            setnaam = self.set_name_resolver(Path(gekozen))
+        except Exception:
+            setnaam = Path(gekozen).name
+        self.recovery_set_label.setText(setnaam)
 
-    def _geldige_map(self):
-        map_pad = Path(self.map_invoer.text().strip().strip('"'))
-        if not self.map_invoer.text().strip() or not map_pad.is_dir():
+    def _geldige_bron(self):
+        tekst = self.map_invoer.text().strip().strip('"')
+        bron = Path(tekst) if tekst else None
+        if bron is None or not bron.is_dir():
             QMessageBox.warning(
-                self, "Ongeldige map",
-                "Selecteer eerst een bestaande map."
+                self,
+                "Ongeldige map",
+                "Selecteer eerst een bestaande bronmap.",
             )
             return None
-        return map_pad
+        return bron.resolve()
 
-    def _analyseer(self):
-        map_pad = self._geldige_map()
-        if map_pad:
-            self._start_actie(
-                "Analyseren", voer_analyse, map_pad, map_pad
+    def _thread_actief(self):
+        if (
+            self.workflow_running
+            and self.workflow_thread is not None
+            and self.workflow_thread.isFinished()
+        ):
+            # Lever eerst alle reeds gequeue-de stage/resultaatsignalen af.
+            QCoreApplication.processEvents()
+            if not self._thread_done:
+                self._thread_finished()
+        return self.workflow_running or self.review_active
+
+    def _start_workflow(self):
+        if self._thread_actief():
+            self._append_log(
+                "Er draait al een workflow; dubbele start genegeerd."
             )
-
-    def _repareer(self):
-        map_pad = self._geldige_map()
-        if map_pad is None:
             return
-        antwoord = QMessageBox.question(
-            self, "Reparatie bevestigen",
-            "Reparatie kan bestanden wijzigen of aanmaken. Doorgaan?",
-        )
-        if antwoord == QMessageBox.StandardButton.Yes:
-            self._start_actie("Repareren", _voer_reparatie_uit, map_pad)
-
-    def _pak_uit(self):
-        map_pad = self._geldige_map()
-        if map_pad is None:
+        bron = self._geldige_bron()
+        if bron is None:
             return
-        antwoord = QMessageBox.question(
-            self, "Uitpakken bevestigen",
-            "Uitpakken maakt bestanden aan. Doorgaan?",
+        self._reset_workflow()
+        self.map_invoer.setText(str(bron))
+        self.recovery_set_label.setText(
+            self.set_name_resolver(bron)
         )
-        if antwoord == QMessageBox.StandardButton.Yes:
-            self._start_actie("Uitpakken", voer_extractie_uit, map_pad)
+        self.statusregel.setText("Workflow wordt uitgevoerd…")
+        self.huidige_activiteit_label.setText("Workflow voorbereiden")
+        self.start_knop.setEnabled(False)
+        self.bladeren_knop.setEnabled(False)
 
-    def _rapport(self):
-        self._start_actie("Rapport tonen", _toon_rapport)
+        thread = self.thread_factory(self)
+        thread.setObjectName("MegamanRecoveryWorkflowThread")
+        worker = self.worker_factory(self.workflow_factory(), bron)
+        worker.setObjectName("MegamanRecoveryWorkflowWorker")
+        worker.moveToThread(thread)
+        self.workflow_thread = thread
+        self.workflow_worker = worker
+        self.workflow_running = True
+        self._worker_done = False
+        self._thread_done = False
 
-    def _start_actie(self, naam, actie, *args):
-        self._zet_actief(False)
+        thread.started.connect(worker.run)
+        worker.stage_started.connect(self._stage_started)
+        worker.stage_progress.connect(self._stage_progress)
+        worker.stage_completed.connect(self._stage_completed)
+        worker.stage_skipped.connect(self._stage_skipped)
+        worker.stage_failed.connect(self._stage_failed)
+        worker.log_message.connect(self._append_log)
+        worker.workflow_completed.connect(self._workflow_completed)
+        worker.workflow_failed.connect(self._workflow_failed)
+        worker.review_requested.connect(self._open_recovery_review)
+        worker.finished.connect(self._worker_finished)
+        worker.finished.connect(
+            thread.quit, Qt.ConnectionType.DirectConnection
+        )
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(self._thread_finished)
+        thread.finished.connect(thread.deleteLater)
+        thread.start()
+
+    def _reset_workflow(self):
+        self.playlist_id = None
+        self.playlist_url = None
+        self._last_summary = None
+        self.playlist_knop.setEnabled(False)
         self.voortgang.setValue(0)
-        self.statusregel.setText(f"{naam}...")
-        self.logvenster.appendPlainText(f"{naam} gestart.")
-        self.worker = self.worker_factory(actie, *args)
-        self.worker.log.connect(self._log)
-        self.worker.progress.connect(self.voortgang.setValue)
-        self.worker.succeeded.connect(
-            lambda resultaat: self.statusregel.setText(
-                f"{naam} voltooid."
-            )
+        self.huidige_stap_label.setText("Geen")
+        self.huidige_activiteit_label.setText("Wachten op Start")
+        self.eindoverzicht.setText(
+            "Eindoverzicht verschijnt na de workflow."
         )
-        self.worker.failed.connect(self._actie_mislukt)
-        self.worker.completed.connect(self._actie_afgerond)
-        self.worker.start()
+        for stage in WORKFLOW_STAGES:
+            self._set_stage_state(stage, "wachtend")
+        for label in self.live_labels.values():
+            label.setText("—")
+        self._last_progress_percent = -1
+        self._progress_timer.restart()
 
-    def _log(self, tekst):
-        self.logvenster.moveCursor(
-            QTextCursor.MoveOperation.End
+    def _set_stage_state(self, stage, state, detail=None):
+        label = self.stage_labels[stage]
+        tekst = f"{STAGE_SYMBOLS[state]} {stage} — {state}"
+        if detail:
+            tekst += f": {detail}"
+        label.setText(tekst)
+        label.setProperty("workflowState", state)
+
+    def _stage_started(self, stage):
+        actief = [
+            naam for naam, label in self.stage_labels.items()
+            if label.property("workflowState") == "actief"
+            and naam != stage
+        ]
+        for naam in actief:
+            self._set_stage_state(
+                naam, "mislukt", "Faseovergang niet afgerond."
+            )
+        self._set_stage_state(stage, "actief")
+        self.huidige_stap_label.setText(stage)
+        self.huidige_activiteit_label.setText(f"{stage} gestart")
+        self.statusregel.setText(f"Bezig: {stage}")
+        self._append_log(f"{stage} gestart.")
+
+    def _stage_progress(self, progress):
+        eindupdate = (
+            progress.total > 0
+            and progress.current >= progress.total
         )
-        self.logvenster.insertPlainText(tekst)
+        if (
+            not eindupdate
+            and progress.percent == self._last_progress_percent
+            and self._progress_timer.isValid()
+            and self._progress_timer.elapsed() < 75
+        ):
+            return
+        self._last_progress_percent = progress.percent
+        self._progress_timer.restart()
+        index = WORKFLOW_STAGES.index(progress.stage)
+        overall = round(
+            100 * (index + progress.percent / 100) / len(WORKFLOW_STAGES)
+        )
+        self.voortgang.setValue(max(self.voortgang.value(), overall))
+        self.huidige_activiteit_label.setText(
+            progress.message or progress.stage
+        )
+        if progress.total:
+            sleutel = (
+                "spotify"
+                if progress.stage == "Spotify Search" else "files"
+            )
+            self.live_labels[sleutel].setText(
+                f"{progress.current} / {progress.total}"
+            )
+        mappings = {
+            "ok": progress.ok_count,
+            "ffmpeg": progress.ffmpeg_error_count,
+            "zero": progress.zero_byte_count,
+            "matched": progress.matched_count,
+            "low": progress.low_confidence_count,
+            "manual": progress.manual_review_count,
+            "not_found": progress.not_found_count,
+            "errors": progress.error_count,
+        }
+        for key, waarde in mappings.items():
+            if waarde is not None:
+                self.live_labels[key].setText(str(waarde))
+
+    def _stage_completed(self, stage):
+        self._set_stage_state(stage, "voltooid")
+        self._append_log(f"{stage} voltooid.")
+
+    def _stage_skipped(self, stage, reason):
+        self._set_stage_state(stage, "overgeslagen", reason)
+        self._append_log(f"{stage} overgeslagen: {reason}")
+
+    def _stage_failed(self, stage, error):
+        self._set_stage_state(stage, "mislukt", error)
+        self._append_log(f"{stage} mislukt: {error}")
+
+    def _append_log(self, message):
+        for regel in str(message or "").splitlines():
+            regel = regel.strip()
+            if not regel or _GEVOELIGE_LOGREGEL.search(regel):
+                continue
+            if regel == self._last_log:
+                continue
+            self._last_log = regel
+            tijd = datetime.now().strftime("%H:%M:%S")
+            self.logvenster.appendPlainText(f"[{tijd}] {regel}")
+        cursor = self.logvenster.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        self.logvenster.setTextCursor(cursor)
         self.logvenster.ensureCursorVisible()
 
-    def _actie_mislukt(self, melding):
-        melding = melding or "Onbekende fout."
-        self.statusregel.setText("Actie mislukt.")
-        self.logvenster.appendPlainText(f"FOUT: {melding}")
-        QMessageBox.critical(self, "Actie mislukt", melding)
-
-    def _actie_afgerond(self):
-        self._zet_actief(True)
-        self.vernieuw_statistieken()
-        self.vernieuw_spotify()
-
-    def _zet_actief(self, actief):
-        self.bladeren_knop.setEnabled(actief)
-        self.map_invoer.setEnabled(actief)
-        for knop in self.actieknoppen:
-            knop.setEnabled(actief)
-
-    def vernieuw_statistieken(self):
-        try:
-            waarden = self.statistics_reader()
-        except Exception as fout:
-            self.logvenster.appendPlainText(
-                f"Statistieken niet beschikbaar: {fout}"
-            )
-            waarden = {}
-        for sleutel, label in self.statistiek_labels.items():
-            label.setText(str(waarden.get(sleutel, 0)))
-        self.vernieuw_spotify()
-
-    def _spotify_zoek(self, retry):
-        map_pad = self._geldige_map()
-        if map_pad:
-            def actie(geselecteerde_map, uitvoer=None):
-                return voer_spotify_smart_uit(
-                    geselecteerde_map, retry=retry, uitvoer=uitvoer
+    def _workflow_completed(self, summary):
+        for stage, label in self.stage_labels.items():
+            if label.property("workflowState") in {"wachtend", "actief"}:
+                self._set_stage_state(
+                    stage, "overgeslagen",
+                    "Geen afzonderlijke actie nodig.",
                 )
-            self._start_actie(
-                "Spotify opnieuw proberen" if retry else "Spotify zoeken",
-                actie, map_pad,
-            )
-
-    def vernieuw_spotify(self):
-        self.spotify_tabel.setRowCount(0)
-        if not Path(DATABASE_BESTAND).is_file():
-            return
-        database = SQLiteDatabase(DATABASE_BESTAND)
-        try:
-            filter_ = self.spotify_filter.currentText()
-            rijen = database.verbinding.execute(
-                """
-                SELECT * FROM spotify_smart_results
-                WHERE ?='Alles' OR status=?
-                ORDER BY recovery_item_id
-                """, (filter_, filter_)
-            ).fetchall()
-            for rij in rijen:
-                index = self.spotify_tabel.rowCount()
-                self.spotify_tabel.insertRow(index)
-                waarden = (
-                    rij["local_path"], rij["original_artist"],
-                    rij["original_title"], rij["local_version"],
-                    rij["found_artist"], rij["found_title"],
-                    rij["found_version"], rij["match_score"], rij["status"],
-                )
-                for kolom, waarde in enumerate(waarden):
-                    item = QTableWidgetItem(
-                        "" if waarde is None else str(waarde)
-                    )
-                    item.setData(
-                        Qt.ItemDataRole.UserRole, rij["recovery_item_id"]
-                    )
-                    self.spotify_tabel.setItem(index, kolom, item)
-            telling = {
-                rij["status"]: rij["aantal"]
-                for rij in database.verbinding.execute(
-                    """
-                    SELECT status, COUNT(*) aantal
-                    FROM spotify_smart_results GROUP BY status
-                    """
-                )
-            }
-            totaal = sum(telling.values())
-            self.spotify_statistieken.setText(
-                f"Te beoordelen: {totaal} | FOUND: {telling.get('FOUND', 0)} "
-                f"| AMBIGUOUS: {telling.get('AMBIGUOUS', 0)} | NOT_FOUND: "
-                f"{telling.get('NOT_FOUND', 0)} | INSUFFICIENT_IDENTITY: "
-                f"{telling.get('INSUFFICIENT_IDENTITY', 0)} | MANUAL: "
-                f"{telling.get('MANUAL', 0)} | REVIEWED_NONE: "
-                f"{telling.get('REVIEWED_NONE', 0)}"
-            )
-        finally:
-            database.sluit()
-
-    def _geselecteerd_item_id(self):
-        rij = self.spotify_tabel.currentRow()
-        if rij < 0 or self.spotify_tabel.item(rij, 0) is None:
-            QMessageBox.warning(self, "Geen selectie", "Selecteer eerst een item.")
-            return None
-        return self.spotify_tabel.item(rij, 0).data(Qt.ItemDataRole.UserRole)
-
-    def _toon_kandidaten(self):
-        item_id = self._geselecteerd_item_id()
-        if item_id is not None:
-            SpotifyKandidatenDialoog(item_id, self).exec()
-            self.vernieuw_spotify()
-
-    def _geen_kandidaat(self):
-        item_id = self._geselecteerd_item_id()
-        if item_id is None:
-            return
-        database = SQLiteDatabase(DATABASE_BESTAND)
-        try:
-            markeer_geen_kandidaat(database, item_id)
-        finally:
-            database.sluit()
-        self.vernieuw_spotify()
-
-    def _open_spotify(self):
-        item_id = self._geselecteerd_item_id()
-        if item_id is None:
-            return
-        database = SQLiteDatabase(DATABASE_BESTAND)
-        try:
-            rij = database.verbinding.execute(
-                """
-                SELECT spotify_url FROM spotify_smart_results
-                WHERE recovery_item_id=?
-                """, (item_id,)
-            ).fetchone()
-        finally:
-            database.sluit()
-        url = rij["spotify_url"] if rij else None
-        if not url or not url.startswith("https://open.spotify.com/track/"):
-            QMessageBox.warning(self, "Ongeldige URL", "Geen geldige Spotify-URL.")
-            return
-        QDesktopServices.openUrl(QUrl(url))
-
-
-class SpotifyKandidatenDialoog(QDialog):
-    def __init__(self, recovery_item_id, parent=None):
-        super().__init__(parent)
-        self.recovery_item_id = recovery_item_id
-        self.setWindowTitle("Spotify-kandidaten")
-        layout = QVBoxLayout(self)
-        self.tabel = QTableWidget(0, 10)
-        self.tabel.setHorizontalHeaderLabels([
-            "Rang", "Artiest", "Titel", "Album", "Duur", "Versie",
-            "Remixer", "Score", "Reden", "Spotify-link",
-        ])
-        layout.addWidget(self.tabel)
-        knoppen = QHBoxLayout()
-        for tekst, methode in (
-            ("Deze versie kiezen", self._kies),
-            ("Openen in Spotify", self._open),
-            ("Geen van deze", self._geen),
-            ("Later beoordelen", self.reject),
-        ):
-            knop = QPushButton(tekst)
-            knop.clicked.connect(methode)
-            knoppen.addWidget(knop)
-        layout.addLayout(knoppen)
-        self._laad()
-
-    def _laad(self):
-        database = SQLiteDatabase(DATABASE_BESTAND)
-        try:
-            rijen = database.verbinding.execute(
-                """
-                SELECT * FROM spotify_candidates
-                WHERE recovery_item_id=? ORDER BY rank_number
-                """, (self.recovery_item_id,)
-            ).fetchall()
-        finally:
-            database.sluit()
-        for rij in rijen:
-            index = self.tabel.rowCount()
-            self.tabel.insertRow(index)
-            waarden = (
-                rij["rank_number"], rij["artist"], rij["title"], rij["album"],
-                rij["duration_ms"], rij["version"], rij["remixer"],
-                rij["total_score"], rij["score_reason"], rij["spotify_url"],
-            )
-            for kolom, waarde in enumerate(waarden):
-                item = QTableWidgetItem("" if waarde is None else str(waarde))
-                item.setData(Qt.ItemDataRole.UserRole, rij["id"])
-                self.tabel.setItem(index, kolom, item)
-
-    def _huidige_id(self):
-        rij = self.tabel.currentRow()
-        return (
-            self.tabel.item(rij, 0).data(Qt.ItemDataRole.UserRole)
-            if rij >= 0 and self.tabel.item(rij, 0) else None
+        self.voortgang.setValue(100)
+        self.huidige_stap_label.setText("Voltooid")
+        self.huidige_activiteit_label.setText(
+            "Alle workflowfasen zijn afgerond."
         )
-
-    def _kies(self):
-        kandidaat_id = self._huidige_id()
-        if kandidaat_id is None:
+        self.statusregel.setText(
+            f"Workflow {summary.get('status', 'voltooid')}."
+        )
+        self._last_summary = summary
+        setnaam = summary.get("recovery_set") or "Onbekend"
+        self.recovery_set_label.setText(setnaam)
+        self.playlist_id = summary.get("playlist_id")
+        self.playlist_url = summary.get("playlist_url")
+        self.playlist_knop.setEnabled(bool(self.playlist_id))
+        self.eindoverzicht.setText(
+            f"Recovery-set: {setnaam}\n"
+            f"Eindstatus: {summary.get('status', 'onbekend')}\n"
+            f"MP3-bestanden: {summary.get('total_mp3', 0)} | "
+            f"OK: {summary.get('ok', 0)} | "
+            f"FFmpeg-fouten: {summary.get('ffmpeg_errors', 0)} | "
+            f"0-byte: {summary.get('zero_byte', 0)} | "
+            f"Recovery-items: {summary.get('recovery_items', 0)}\n"
+            f"MATCHED: {summary.get('matched', 0)} | "
+            f"LOW_CONFIDENCE: {summary.get('low_confidence', 0)} | "
+            f"MANUAL_REVIEW: {summary.get('manual_review', 0)} | "
+            f"NOT_FOUND: {summary.get('not_found', 0)} | "
+            f"Technische Spotify-fouten: "
+            f"{summary.get('spotify_errors', 0)}\n"
+            f"Nieuw aan playlist: {summary.get('playlist_added', 0)} | "
+            f"Reeds aanwezig: {summary.get('playlist_existing', 0)} | "
+            f"Playlist: {summary.get('playlist_name') or 'niet beschikbaar'}"
+            f"\nRapport: {summary.get('report_path') or 'niet beschikbaar'}"
+        )
+        if summary.get("playlist_sync_status") in {
+            "SUCCESS", "PARTIAL", "FAILED"
+        }:
+            self.result_dialog = self.result_factory(
+                summary, summary.get("report_path"), self
+            )
+            self.result_dialog.show()
+    def _open_recovery_review(self, summary):
+        self.review_active = True
+        self.start_knop.setEnabled(False)
+        self.bladeren_knop.setEnabled(False)
+        self._set_stage_state("Recovery Review", "actief")
+        self.huidige_stap_label.setText("Recovery Review")
+        self.huidige_activiteit_label.setText(
+            "Recovery-items handmatig beoordelen"
+        )
+        self.statusregel.setText("Recovery Review wordt uitgevoerd…")
+        self._append_log(
+            "Recovery Review geopend; er is nog geen playlist aangemaakt."
+        )
+        try:
+            dialog = self.review_factory(
+                summary["recovery_set_id"],
+                summary["recovery_set"],
+                self,
+            )
+        except Exception as error:
+            self.review_active = False
+            self._set_stage_state(
+                "Recovery Review", "mislukt", str(error)
+            )
+            self._append_log(f"Recovery Review kon niet openen: {error}")
+            QMessageBox.critical(
+                self, "Recovery Review", str(error)
+            )
             return
-        database = SQLiteDatabase(DATABASE_BESTAND)
-        try:
-            kies_kandidaat(database, self.recovery_item_id, kandidaat_id)
-        finally:
-            database.sluit()
-        self.accept()
+        self.review_dialog = dialog
+        dialog.finished.connect(self._review_finished)
+        dialog.show()
 
-    def _geen(self):
-        database = SQLiteDatabase(DATABASE_BESTAND)
+    def _review_finished(self, result):
+        self.review_active = False
+        accepted = result == QDialog.DialogCode.Accepted
+        dialog = self.review_dialog
+        besluit = {
+            "accepted": accepted,
+            "create_playlist": bool(
+                accepted and dialog
+                and getattr(dialog, "playlist_requested", False)
+            ),
+            "playlist_name": (
+                getattr(dialog, "prepared_playlist_name", None)
+                if dialog else None
+            ),
+        }
         try:
-            markeer_geen_kandidaat(database, self.recovery_item_id)
+            if accepted:
+                self.statusregel.setText(
+                    "Recovery Review opgeslagen; workflow wordt hervat."
+                )
+                self._append_log(
+                    "Recovery Review opgeslagen. "
+                    "Er is geen playlist aangemaakt."
+                )
+            else:
+                self.statusregel.setText(
+                    "Recovery Review gesloten; workflow wordt hervat."
+                )
+                self._append_log(
+                    "Recovery Review gesloten; "
+                    "er is geen playlist aangemaakt."
+                )
+            self.huidige_stap_label.setText("Recovery Review")
+            self.huidige_activiteit_label.setText(
+                "Backendworkflow hervatten"
+            )
+            self.review_dialog = None
         finally:
-            database.sluit()
-        self.accept()
+            if self.workflow_worker is not None:
+                self.workflow_worker.resolve_review(besluit)
 
-    def _open(self):
-        rij = self.tabel.currentRow()
-        url = self.tabel.item(rij, 9).text() if rij >= 0 else ""
-        if url.startswith("https://open.spotify.com/track/"):
+    def _workflow_failed(self, error):
+        for stage, label in self.stage_labels.items():
+            toestand = label.property("workflowState")
+            if toestand == "actief":
+                self._set_stage_state(stage, "mislukt", error)
+            elif toestand == "wachtend":
+                self._set_stage_state(
+                    stage, "overgeslagen",
+                    "Workflow eerder mislukt.",
+                )
+        self.huidige_stap_label.setText("Mislukt")
+        self.huidige_activiteit_label.setText(error)
+        self.statusregel.setText("Workflow mislukt.")
+        self.eindoverzicht.setText(
+            f"Recovery-set: {self.recovery_set_label.text()}\n"
+            f"Eindstatus: mislukt\nFout: {error}"
+        )
+        QMessageBox.critical(self, "Workflow mislukt", error)
+
+    def _thread_finished(self):
+        self.thread_finished_count += 1
+        self._thread_done = True
+        self._maybe_finalize_thread()
+
+    def _worker_finished(self):
+        self._worker_done = True
+        self._maybe_finalize_thread()
+
+    def _maybe_finalize_thread(self):
+        # thread.finished is de definitieve lifecyclegrens. De worker kan pas
+        # stoppen nadat finished is uitgezonden; wachten op twee afzonderlijk
+        # gequeue-de GUI-slots introduceert alleen een race bij eventdrukte.
+        if not self._thread_done:
+            return
+        self.workflow_running = False
+        self.start_knop.setEnabled(not self.review_active)
+        self.bladeren_knop.setEnabled(not self.review_active)
+        if self.statusregel.text() == "Workflow wordt uitgevoerd…":
+            self.statusregel.setText("Workflow beëindigd.")
+
+    def _open_playlist(self):
+        url = self.playlist_url or spotify_playlist_url(self.playlist_id)
+        if url:
             QDesktopServices.openUrl(QUrl(url))
-        else:
-            QMessageBox.warning(self, "Ongeldige URL", "Geen geldige Spotify-URL.")
+
+    def closeEvent(self, event: QCloseEvent):
+        if self._thread_actief():
+            QMessageBox.information(
+                self,
+                "Workflow actief",
+                "De workflow wordt nog uitgevoerd. "
+                "Wacht tot deze klaar is.",
+            )
+            event.ignore()
+            return
+        event.accept()

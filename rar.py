@@ -1,3 +1,4 @@
+import re
 import subprocess
 
 from database import zet_rar_status
@@ -9,10 +10,17 @@ ZEVEN_ZIP = r"C:\Program Files\7-Zip\7z.exe"
 
 def zoek_part01_bestanden(rar_map):
     """
-    Zoek alle .part01.rar bestanden.
+    Zoek eerste volumes van multipart-RAR-sets, ongeacht nummerbreedte.
     """
 
-    return sorted(rar_map.rglob("*.part01.rar"))
+    eerste_volume = re.compile(r"^.+\.part0*1\.rar$", re.IGNORECASE)
+    return sorted(
+        (
+            pad for pad in rar_map.rglob("*")
+            if pad.is_file() and eerste_volume.match(pad.name)
+        ),
+        key=lambda pad: str(pad).casefold(),
+    )
 
 
 def normaliseer_pad(bestandnaam):

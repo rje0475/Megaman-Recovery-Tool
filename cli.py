@@ -1,4 +1,6 @@
 import argparse
+import io
+import os
 import sys
 from pathlib import Path
 
@@ -7,6 +9,8 @@ from database import DATABASE_BESTAND
 from par2_repair import Par2RepairFout
 from rar_extractor import ExtractieFout
 from spotify_smart import SpotifyZoekFout
+from core.salvage_workflow import SalvageFout
+from core.version import VersionInfo
 
 
 BANNER = (
@@ -16,8 +20,44 @@ BANNER = (
 )
 
 
-def maak_parser():
-    parser = argparse.ArgumentParser(
+def _safe_write(stream, text):
+    """Schrijf best-effort; foutafhandeling mag nooit zelf crashen."""
+    if stream is None:
+        return False
+    try:
+        stream.write(str(text))
+        try:
+            stream.flush()
+        except Exception:
+            pass
+        return True
+    except Exception:
+        return False
+
+
+def _resolve_output(uitvoer=None):
+    if uitvoer is not None:
+        return uitvoer
+    if sys.stdout is not None:
+        return sys.stdout
+    try:
+        return open(os.devnull, "w", encoding="utf-8")
+    except Exception:
+        return io.StringIO()
+
+
+class SafeArgumentParser(argparse.ArgumentParser):
+    def __init__(self, *args, output_stream=None, **kwargs):
+        self.output_stream = output_stream
+        super().__init__(*args, **kwargs)
+
+    def _print_message(self, message, file=None):
+        _safe_write(file if file is not None else self.output_stream, message)
+
+
+def maak_parser(uitvoer=None):
+    parser = SafeArgumentParser(
+        output_stream=_resolve_output(uitvoer),
         prog="python main.py",
         allow_abbrev=False,
         description=(
@@ -32,6 +72,7 @@ def maak_parser():
             "  python main.py --repair \"C:\\pad\\naar\\map\"\n"
             "  python main.py --spotify-search \"C:\\pad\\naar\\map\"\n"
             "  python main.py --spotify-retry \"C:\\pad\\naar\\map\"\n"
+            "  python main.py --salvage-rar \"C:\\pad\\naar\\map\"\n"
             "  python main.py --extract \"C:\\pad\\naar\\downloadmap\"\n"
             "  python main.py --demo\n"
             "  python main.py --report"
@@ -39,6 +80,19 @@ def maak_parser():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     acties = parser.add_mutually_exclusive_group()
+    parser.add_argument(
+        "--version", action="version", version=VersionInfo.current().display
+    )
+    acties.add_argument(
+        "--salvage-rar",
+        metavar="MAP",
+        help="herstel en pak RAR-sets fouttolerant uit",
+    )
+    parser.add_argument("--workspace", metavar="MAP")
+    parser.add_argument("--rar-set", metavar="NAAM")
+    parser.add_argument("--skip-par2", action="store_true")
+    parser.add_argument("--skip-winrar", action="store_true")
+    parser.add_argument("--no-spotify", action="store_true")
     acties.add_argument(
         "--spotify-search",
         metavar="MAP",
@@ -95,11 +149,11 @@ def toon_laatste_rapport(
     reports_map=Path("reports"),
     uitvoer=None,
 ):
-    uitvoer = uitvoer or sys.stdout
+    uitvoer = _resolve_output(uitvoer)
     database_pad = Path(database_pad)
     reports_map = Path(reports_map)
     if not database_pad.is_file():
-        uitvoer.write(
+        _safe_write(uitvoer,
             f"Geen normale database gevonden: {database_pad.resolve()}\n"
         )
         return 1
@@ -109,13 +163,13 @@ def toon_laatste_rapport(
         reverse=True,
     ) if reports_map.is_dir() else []
     if not rapporten:
-        uitvoer.write(
+        _safe_write(uitvoer,
             f"Geen rapport gevonden in: {reports_map.resolve()}\n"
         )
         return 1
     rapport = rapporten[0]
-    uitvoer.write(f"Meest recente rapport: {rapport.resolve()}\n\n")
-    uitvoer.write(rapport.read_text(encoding="utf-8"))
+    _safe_write(uitvoer, f"Meest recente rapport: {rapport.resolve()}\n\n")
+    _safe_write(uitvoer, rapport.read_text(encoding="utf-8"))
     return 0
 
 
@@ -130,23 +184,57 @@ def _interactieve_paden(invoer):
 
 
 def main(argv=None, invoer=input, uitvoer=None):
-    uitvoer = uitvoer or sys.stdout
-    args = maak_parser().parse_args(argv)
-    uitvoer.write(BANNER + "\n")
+    if (
+        argv is None
+        and getattr(sys, "frozen", False)
+        and sys.stdout is None
+        and len(sys.argv) == 1
+    ):
+        argv = ["--gui"]
+    uitvoer = _resolve_output(uitvoer)
+    parser = maak_parser(uitvoer)
+    args = parser.parse_args(argv)
+    if (
+        args.workspace or args.rar_set or args.skip_par2
+        or args.skip_winrar or args.no_spotify
+    ) and not args.salvage_rar:
+        parser.error(
+            "salvage-opties horen bij --salvage-rar"
+        )
     try:
         if args.gui:
             from gui import GuiDependencyFout, start_gui
             try:
                 return start_gui()
             except GuiDependencyFout as fout:
-                uitvoer.write(f"FOUT: {fout}\n")
+                _safe_write(uitvoer, f"FOUT: {fout}\n")
                 return 1
+        _safe_write(uitvoer, BANNER + "\n")
         if args.demo:
             from tools.create_demo_recovery_test import voer_demo_uit
             voer_demo_uit(uitvoer=uitvoer)
             return 0
         if args.report:
             return toon_laatste_rapport(uitvoer=uitvoer)
+        if args.salvage_rar:
+            from core.salvage_workflow import voer_salvage_workflow_uit
+            resultaten = voer_salvage_workflow_uit(
+                Path(args.salvage_rar.strip('"')),
+                workspace=(
+                    Path(args.workspace.strip('"')) if args.workspace else None
+                ),
+                rar_set=args.rar_set,
+                skip_par2=args.skip_par2,
+                skip_winrar=args.skip_winrar,
+                no_spotify=args.no_spotify,
+                uitvoer=uitvoer,
+            )
+            statussen = {resultaat.eindstatus for resultaat in resultaten}
+            return (
+                2 if "FAILED" in statussen
+                else 1 if "PARTIAL" in statussen
+                else 0
+            )
         if args.spotify_search or args.spotify_retry:
             from spotify_smart import voer_spotify_smart_uit
             overzicht = voer_spotify_smart_uit(
@@ -178,15 +266,15 @@ def main(argv=None, invoer=input, uitvoer=None):
         return 0
     except (
         AnalyseFout, ExtractieFout, Par2RepairFout, SpotifyZoekFout,
-        OSError, ValueError
+        SalvageFout, OSError, ValueError
     ) as fout:
-        uitvoer.write(f"FOUT: {fout}\n")
+        _safe_write(uitvoer, f"FOUT: {fout}\n")
         return 1
     except KeyboardInterrupt:
-        uitvoer.write("\nAfgebroken door gebruiker.\n")
+        _safe_write(uitvoer, "\nAfgebroken door gebruiker.\n")
         return 130
     except Exception as fout:
-        uitvoer.write(
+        _safe_write(uitvoer,
             f"FOUT: de analyse kon niet worden voltooid: {fout}\n"
         )
         return 1

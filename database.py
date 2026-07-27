@@ -1,4 +1,6 @@
+import re
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -8,6 +10,40 @@ from paden import normaliseer_relatief_pad_sleutel
 DATABASE_BESTAND = Path("megaman_recovery.db")
 
 
+def leid_archive_set_name_af(archive_name):
+    naam = Path(str(archive_name)).name
+    naam = re.sub(r"(?i)\.part0*1\.rar$", "", naam)
+    naam = re.sub(r"(?i)\.rar$", "", naam)
+    return naam
+
+
+def verkrijg_of_maak_recovery_set(database, archive_name, archive_set_name=None):
+    archive_name = Path(str(archive_name)).name
+    archive_set_name = (
+        str(archive_set_name).strip()
+        if archive_set_name
+        else leid_archive_set_name_af(archive_name)
+    )
+    nu = datetime.now().isoformat(timespec="seconds")
+    database.verbinding.execute(
+        """
+        INSERT INTO recovery_sets (
+          archive_name, archive_set_name, created_at, updated_at
+        ) VALUES (?, ?, ?, ?)
+        ON CONFLICT (archive_set_name) DO UPDATE SET
+          archive_name=excluded.archive_name,
+          updated_at=excluded.updated_at
+        """,
+        (archive_name, archive_set_name, nu, nu),
+    )
+    rij = database.verbinding.execute(
+        "SELECT id FROM recovery_sets WHERE archive_set_name=?",
+        (archive_set_name,),
+    ).fetchone()
+    database.verbinding.commit()
+    return rij["id"]
+
+
 class SQLiteDatabase:
     """
     Bied dezelfde eenvoudige interface als de eerdere in-memory database.
@@ -15,10 +51,45 @@ class SQLiteDatabase:
 
     def __init__(self, pad=DATABASE_BESTAND):
         self.pad = Path(pad)
-        self.verbinding = sqlite3.connect(self.pad)
+        self.pad.parent.mkdir(parents=True, exist_ok=True)
+        self.verbinding = sqlite3.connect(self.pad, timeout=30)
         self.verbinding.row_factory = sqlite3.Row
         self.verbinding.execute("PRAGMA foreign_keys = ON")
+        self.verbinding.execute("PRAGMA busy_timeout = 30000")
+        self.verbinding.execute("PRAGMA journal_mode = WAL")
         self._maak_tabel()
+
+    @contextmanager
+    def transactie(self, immediate=False):
+        """Atomische transactie met gegarandeerde rollback bij fouten."""
+        if self.verbinding.in_transaction:
+            savepoint = f"sp_{id(self):x}"
+            self.verbinding.execute(f"SAVEPOINT {savepoint}")
+            try:
+                yield self.verbinding
+            except Exception:
+                self.verbinding.execute(f"ROLLBACK TO {savepoint}")
+                self.verbinding.execute(f"RELEASE {savepoint}")
+                raise
+            else:
+                self.verbinding.execute(f"RELEASE {savepoint}")
+            return
+        self.verbinding.execute("BEGIN IMMEDIATE" if immediate else "BEGIN")
+        try:
+            yield self.verbinding
+        except Exception:
+            self.verbinding.rollback()
+            raise
+        else:
+            self.verbinding.commit()
+
+    def integrity_check(self):
+        try:
+            rows = self.verbinding.execute("PRAGMA integrity_check").fetchall()
+        except sqlite3.DatabaseError as error:
+            return False, (str(error),)
+        messages = tuple(row[0] for row in rows)
+        return messages == ("ok",), messages
 
     def _maak_tabel(self):
         self.verbinding.execute(
@@ -184,12 +255,82 @@ class SQLiteDatabase:
             "identiteit_bepaald_op": "TEXT",
             "identiteit_bron_handtekening": "TEXT",
             "identiteit_reden": "TEXT",
+            "recovery_set_id": "INTEGER",
+            "spotify_track_id": "TEXT",
+            "spotify_uri": "TEXT",
+            "spotify_url": "TEXT",
+            "spotify_album": "TEXT",
+            "spotify_artists": "TEXT",
+            "spotify_title": "TEXT",
+            "spotify_duration_ms": "INTEGER",
+            "spotify_popularity": "INTEGER",
+            "spotify_confidence": "REAL",
+            "spotify_search_method": "TEXT",
+            "spotify_status": "TEXT",
+            "spotify_last_checked": "TEXT",
+            "playlist_selected": "INTEGER NOT NULL DEFAULT 0",
+            "reviewed_at": "TEXT",
+            "selected_spotify_candidate_id": "INTEGER",
+            "selected_spotify_uri": "TEXT",
+            "selected_spotify_track_id": "TEXT",
+            "selected_spotify_artist": "TEXT",
+            "selected_spotify_title": "TEXT",
+            "selected_spotify_album": "TEXT",
+            "selected_spotify_duration_ms": "INTEGER",
+            "selected_spotify_confidence": "REAL",
+            "match_review_status": "TEXT",
+            "match_reviewed_at": "TEXT",
+            "selected_youtube_candidate_id": "INTEGER",
+            "selected_youtube_video_id": "TEXT",
+            "selected_youtube_url": "TEXT",
+            "selected_youtube_title": "TEXT",
+            "selected_youtube_channel": "TEXT",
+            "selected_youtube_duration_seconds": "INTEGER",
+            "selected_youtube_confidence": "REAL",
+            "youtube_review_status": "TEXT",
+            "youtube_reviewed_at": "TEXT",
+            "preferred_audio_source": "TEXT",
+            "youtube_last_searched": "TEXT",
+            "youtube_search_error": "TEXT",
+            "youtube_search_queries_json": "TEXT",
         }
 
         for kolom, kolomtype in recovery_migraties.items():
             if kolom not in recovery_kolommen:
                 self.verbinding.execute(
                     f"ALTER TABLE recovery_items "
+                    f"ADD COLUMN {kolom} {kolomtype}"
+                )
+        self.verbinding.execute(
+            """
+            CREATE TABLE IF NOT EXISTS recovery_sets (
+                id INTEGER PRIMARY KEY,
+                archive_name TEXT NOT NULL,
+                archive_set_name TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        recovery_set_kolommen = {
+            rij["name"]
+            for rij in self.verbinding.execute(
+                "PRAGMA table_info(recovery_sets)"
+            )
+        }
+        recovery_set_migraties = {
+            "spotify_playlist_id": "TEXT",
+            "spotify_playlist_name": "TEXT",
+            "spotify_playlist_url": "TEXT",
+            "spotify_playlist_track_count": "INTEGER NOT NULL DEFAULT 0",
+            "spotify_playlist_synced_at": "TEXT",
+            "spotify_playlist_sync_status": "TEXT",
+            "spotify_playlist_last_error": "TEXT",
+        }
+        for kolom, kolomtype in recovery_set_migraties.items():
+            if kolom not in recovery_set_kolommen:
+                self.verbinding.execute(
+                    f"ALTER TABLE recovery_sets "
                     f"ADD COLUMN {kolom} {kolomtype}"
                 )
         self.verbinding.execute(
@@ -380,6 +521,295 @@ class SQLiteDatabase:
                 FOREIGN KEY (recovery_item_id) REFERENCES recovery_items(id)
                     ON DELETE CASCADE,
                 UNIQUE (recovery_item_id, spotify_track_id)
+            )
+            """
+        )
+        spotify_candidate_kolommen = {
+            rij["name"]
+            for rij in self.verbinding.execute(
+                "PRAGMA table_info(spotify_candidates)"
+            )
+        }
+        spotify_candidate_migraties = {
+            "spotify_uri": "TEXT",
+            "album_cover_url": "TEXT",
+            "popularity": "INTEGER",
+            "release_date": "TEXT",
+        }
+        for kolom, kolomtype in spotify_candidate_migraties.items():
+            if kolom not in spotify_candidate_kolommen:
+                self.verbinding.execute(
+                    f"ALTER TABLE spotify_candidates "
+                    f"ADD COLUMN {kolom} {kolomtype}"
+                )
+        self.verbinding.execute(
+            """
+            CREATE TABLE IF NOT EXISTS youtube_candidates (
+                id INTEGER PRIMARY KEY,
+                recovery_item_id INTEGER NOT NULL,
+                video_id TEXT NOT NULL,
+                youtube_url TEXT NOT NULL,
+                title TEXT NOT NULL,
+                channel_name TEXT,
+                duration_seconds INTEGER,
+                published_at TEXT,
+                view_count INTEGER,
+                thumbnail_url TEXT,
+                confidence REAL NOT NULL,
+                artist_score REAL NOT NULL,
+                title_score REAL NOT NULL,
+                version_score REAL NOT NULL,
+                duration_score REAL NOT NULL,
+                channel_score REAL NOT NULL,
+                penalty_score REAL NOT NULL,
+                warnings_json TEXT NOT NULL DEFAULT '[]',
+                raw_metadata_json TEXT NOT NULL DEFAULT '{}',
+                search_query TEXT NOT NULL DEFAULT '',
+                rank_number INTEGER,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (recovery_item_id) REFERENCES recovery_items(id)
+                    ON DELETE CASCADE,
+                UNIQUE (recovery_item_id, video_id)
+            )
+            """
+        )
+        self.verbinding.execute(
+            """CREATE INDEX IF NOT EXISTS idx_youtube_candidates_item
+            ON youtube_candidates(recovery_item_id, confidence DESC)"""
+        )
+        self.verbinding.execute(
+            """
+            CREATE TABLE IF NOT EXISTS download_queue (
+                job_id TEXT PRIMARY KEY,
+                recovery_item_id INTEGER NOT NULL UNIQUE,
+                youtube_candidate_id INTEGER,
+                spotify_candidate_id INTEGER,
+                source_type TEXT NOT NULL,
+                status TEXT NOT NULL,
+                priority INTEGER NOT NULL DEFAULT 0,
+                queue_position INTEGER NOT NULL,
+                retries INTEGER NOT NULL DEFAULT 0,
+                max_retries INTEGER NOT NULL DEFAULT 3,
+                progress INTEGER NOT NULL DEFAULT 0,
+                last_stage TEXT,
+                error_code TEXT,
+                last_error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                started_at TEXT,
+                finished_at TEXT,
+                download_path TEXT,
+                download_size INTEGER,
+                download_started_at TEXT,
+                download_finished_at TEXT,
+                download_duration REAL,
+                download_status TEXT,
+                download_speed REAL,
+                download_eta INTEGER,
+                processed_path TEXT,
+                processed_size INTEGER,
+                processed_format TEXT,
+                processed_codec TEXT,
+                processed_bitrate INTEGER,
+                processed_sample_rate INTEGER,
+                processed_channels INTEGER,
+                processed_duration REAL,
+                processing_started_at TEXT,
+                processing_finished_at TEXT,
+                processing_status TEXT,
+                processing_error_code TEXT,
+                processing_error_message TEXT,
+                processing_warning TEXT,
+                source_duration REAL,
+                source_format TEXT,
+                source_removed INTEGER NOT NULL DEFAULT 0,
+                final_path TEXT,
+                filename TEXT,
+                metadata_written INTEGER NOT NULL DEFAULT 0,
+                artwork_written INTEGER NOT NULL DEFAULT 0,
+                finalized_at TEXT,
+                finalization_status TEXT,
+                finalization_error_code TEXT,
+                finalization_error_message TEXT,
+                final_size INTEGER,
+                written_tags TEXT,
+                FOREIGN KEY (recovery_item_id) REFERENCES recovery_items(id)
+                    ON DELETE CASCADE,
+                FOREIGN KEY (youtube_candidate_id) REFERENCES youtube_candidates(id)
+                    ON DELETE SET NULL,
+                FOREIGN KEY (spotify_candidate_id) REFERENCES spotify_candidates(id)
+                    ON DELETE SET NULL
+            )
+            """
+        )
+        self.verbinding.execute(
+            """CREATE UNIQUE INDEX IF NOT EXISTS idx_download_queue_position
+            ON download_queue(queue_position)"""
+        )
+        self.verbinding.execute(
+            """CREATE INDEX IF NOT EXISTS idx_download_queue_status
+            ON download_queue(status, priority DESC, queue_position)"""
+        )
+        download_queue_kolommen = {
+            rij["name"] for rij in self.verbinding.execute(
+                "PRAGMA table_info(download_queue)"
+            )
+        }
+        download_queue_migraties = {
+            "download_path": "TEXT", "download_size": "INTEGER",
+            "download_started_at": "TEXT", "download_finished_at": "TEXT",
+            "download_duration": "REAL", "download_status": "TEXT",
+            "download_speed": "REAL", "download_eta": "INTEGER",
+            "processed_path": "TEXT", "processed_size": "INTEGER",
+            "processed_format": "TEXT", "processed_codec": "TEXT",
+            "processed_bitrate": "INTEGER", "processed_sample_rate": "INTEGER",
+            "processed_channels": "INTEGER", "processed_duration": "REAL",
+            "processing_started_at": "TEXT", "processing_finished_at": "TEXT",
+            "processing_status": "TEXT", "processing_error_code": "TEXT",
+            "processing_error_message": "TEXT", "processing_warning": "TEXT",
+            "source_duration": "REAL",
+            "source_format": "TEXT",
+            "source_removed": "INTEGER NOT NULL DEFAULT 0",
+            "final_path": "TEXT", "filename": "TEXT",
+            "metadata_written": "INTEGER NOT NULL DEFAULT 0",
+            "artwork_written": "INTEGER NOT NULL DEFAULT 0",
+            "finalized_at": "TEXT", "finalization_status": "TEXT",
+            "finalization_error_code": "TEXT",
+            "finalization_error_message": "TEXT", "final_size": "INTEGER",
+            "written_tags": "TEXT",
+        }
+        for kolom, kolomtype in download_queue_migraties.items():
+            if kolom not in download_queue_kolommen:
+                self.verbinding.execute(
+                    f"ALTER TABLE download_queue ADD COLUMN {kolom} {kolomtype}"
+                )
+        rar_item_kolommen = {
+            rij["name"] for rij in self.verbinding.execute(
+                "PRAGMA table_info(rar_inventory_items)"
+            )
+        }
+        if "bronvolume" not in rar_item_kolommen:
+            self.verbinding.execute(
+                "ALTER TABLE rar_inventory_items ADD COLUMN bronvolume TEXT"
+            )
+        self.verbinding.execute(
+            """
+            CREATE TABLE IF NOT EXISTS salvage_runs (
+                id INTEGER PRIMARY KEY,
+                started_at TEXT NOT NULL,
+                finished_at TEXT NOT NULL,
+                rar_set_key TEXT NOT NULL,
+                source_status TEXT,
+                par2_result TEXT,
+                winrar_result TEXT NOT NULL,
+                winrar_path TEXT,
+                sevenzip_result TEXT NOT NULL,
+                sevenzip_path TEXT,
+                chosen_archive TEXT NOT NULL,
+                recovery_workspace TEXT NOT NULL,
+                extraction_dir TEXT NOT NULL,
+                expected_count INTEGER NOT NULL,
+                ok_count INTEGER NOT NULL,
+                missing_count INTEGER NOT NULL,
+                zero_byte_count INTEGER NOT NULL,
+                unreadable_count INTEGER NOT NULL,
+                size_mismatch_count INTEGER NOT NULL,
+                extra_count INTEGER NOT NULL,
+                recovery_item_count INTEGER NOT NULL,
+                final_status TEXT NOT NULL,
+                summary TEXT NOT NULL
+            )
+            """
+        )
+        salvage_kolommen = {
+            rij["name"]
+            for rij in self.verbinding.execute(
+                "PRAGMA table_info(salvage_runs)"
+            )
+        }
+        salvage_migraties = {
+            "physical_count": "INTEGER NOT NULL DEFAULT 0",
+            "damaged_count": "INTEGER NOT NULL DEFAULT 0",
+            "ffmpeg_error_count": "INTEGER NOT NULL DEFAULT 0",
+            "deduplicated_count": "INTEGER NOT NULL DEFAULT 0",
+            "recovery_set_id": "INTEGER",
+        }
+        for kolom, definitie in salvage_migraties.items():
+            if kolom not in salvage_kolommen:
+                self.verbinding.execute(
+                    f"ALTER TABLE salvage_runs ADD COLUMN {kolom} {definitie}"
+                )
+        oude_runs = self.verbinding.execute(
+            """
+            SELECT run.id, run.rar_set_key, sets.rar_startbestand
+            FROM salvage_runs run
+            LEFT JOIN rar_sets sets ON sets.rar_set_key=run.rar_set_key
+            WHERE run.recovery_set_id IS NULL
+            """
+        ).fetchall()
+        for run in oude_runs:
+            if not run["rar_startbestand"]:
+                continue
+            archive_name = Path(run["rar_startbestand"]).name
+            archive_set_name = leid_archive_set_name_af(archive_name)
+            nu = datetime.now().isoformat(timespec="seconds")
+            self.verbinding.execute(
+                """
+                INSERT INTO recovery_sets (
+                  archive_name, archive_set_name, created_at, updated_at
+                ) VALUES (?, ?, ?, ?)
+                ON CONFLICT (archive_set_name) DO NOTHING
+                """,
+                (archive_name, archive_set_name, nu, nu),
+            )
+            recovery_set_id = self.verbinding.execute(
+                "SELECT id FROM recovery_sets WHERE archive_set_name=?",
+                (archive_set_name,),
+            ).fetchone()["id"]
+            self.verbinding.execute(
+                "UPDATE salvage_runs SET recovery_set_id=? WHERE id=?",
+                (recovery_set_id, run["id"]),
+            )
+            self.verbinding.execute(
+                """
+                UPDATE recovery_items SET recovery_set_id=?
+                WHERE rar_set_key=? AND recovery_set_id IS NULL
+                """,
+                (recovery_set_id, run["rar_set_key"]),
+            )
+        self.verbinding.execute(
+            """
+            CREATE TABLE IF NOT EXISTS salvage_file_results (
+                id INTEGER PRIMARY KEY,
+                salvage_run_id INTEGER NOT NULL,
+                internal_path TEXT NOT NULL,
+                extracted_path TEXT,
+                status TEXT NOT NULL,
+                expected_size INTEGER,
+                actual_size INTEGER,
+                reason TEXT NOT NULL,
+                FOREIGN KEY (salvage_run_id) REFERENCES salvage_runs(id)
+                    ON DELETE CASCADE
+            )
+            """
+        )
+        self.verbinding.execute(
+            """
+            CREATE TABLE IF NOT EXISTS rar_cleanup_runs (
+                id INTEGER PRIMARY KEY,
+                salvage_run_id INTEGER NOT NULL UNIQUE,
+                rar_set_key TEXT NOT NULL,
+                source_root TEXT NOT NULL,
+                planned_volumes TEXT NOT NULL,
+                removed_volumes TEXT NOT NULL DEFAULT '[]',
+                failed_volumes TEXT NOT NULL DEFAULT '{}',
+                status TEXT NOT NULL,
+                reason TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (salvage_run_id) REFERENCES salvage_runs(id)
+                    ON DELETE CASCADE
             )
             """
         )
@@ -849,6 +1279,15 @@ def vervang_rar_inventory_items(
             """,
             (rar_set_key, verouderde_sleutel)
         )
+
+    database.verbinding.execute(
+        """
+        UPDATE rar_inventory_items
+        SET bronvolume = ?
+        WHERE rar_set_key = ? AND bronvolume IS NULL
+        """,
+        (str(rar_startbestand), rar_set_key),
+    )
 
     database.verbinding.commit()
 

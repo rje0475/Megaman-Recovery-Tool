@@ -29,6 +29,24 @@ from recovery import genereer_recovery_items
 
 
 class PadIdentiteitTest(unittest.TestCase):
+    def test_parsing_verandert_het_fysieke_bronpad_niet(self):
+        namen = (
+            "07050090 Artist - Titel.mp3",
+            "Artist – Titel.mp3",
+            "Artist's Song - Één.mp3",
+            "Artiest  met  spaties - Tïtel.mp3",
+            "日本語 - Muziek.mp3",
+        )
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            for naam in namen:
+                bestand = root / naam
+                bestand.touch()
+                exact = str(bestand)
+                parseer_verwacht_pad(naam)
+                self.assertTrue(bestand.exists())
+                self.assertEqual(str(bestand), exact)
+
     def test_ontbrekende_mp3_met_artiest_en_titel(self):
         resultaat = parseer_verwacht_pad(
             r"Album\01 - Artiest - Titel.mp3"

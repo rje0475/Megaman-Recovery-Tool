@@ -1,3 +1,4 @@
+import unicodedata
 from pathlib import PureWindowsPath
 
 
@@ -6,7 +7,9 @@ def normaliseer_relatief_pad(pad):
     Normaliseer een relatief pad zonder betekenisvolle onderdelen te wijzigen.
     """
 
-    tekst = str(pad).strip().replace("/", "\\")
+    tekst = unicodedata.normalize(
+        "NFC", str(pad).strip().replace("/", "\\")
+    )
     windows_pad = PureWindowsPath(tekst)
 
     if windows_pad.is_absolute() or windows_pad.drive:

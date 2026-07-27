@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12", cache: pip}
+      - run: python -m pip install -r requirements.txt
+      - name: Lint (compile)
+        run: python -m compileall -q core gui tests
+      - name: Tests
+        env: {QT_QPA_PLATFORM: offscreen}
+        run: python -m pytest
+
+  build:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12", cache: pip}
+      - run: python -m pip install -r requirements-build.txt
+      - name: Build windowed executable
+        run: python -m PyInstaller --clean --noconfirm megaman_recovery.spec
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Megaman-Recovery-Tool-Windows
+          path: dist/MegamanRecoveryTool/
+          if-no-files-found: error

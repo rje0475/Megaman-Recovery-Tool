@@ -1,5 +1,6 @@
 from pathlib import Path
 from datetime import datetime
+from time import perf_counter
 
 from database import verkrijg_ontbrekende_rar_items
 from database import verkrijg_rar_inventory_overzicht
@@ -11,6 +12,7 @@ from par_inventory import verkrijg_par_overzicht
 
 
 def maak_rapport(map_pad, database):
+    runtime_started = perf_counter()
 
     reports_map = Path("reports")
     reports_map.mkdir(exist_ok=True)
@@ -223,6 +225,46 @@ def maak_rapport(map_pad, database):
             f.write(f"Bron {bron}: {aantal}\n")
         f.write("\n")
 
+        f.write("SALVAGE WORKFLOW\n")
+        f.write("------------------------------\n")
+        salvage_runs = database.verbinding.execute(
+            """
+            SELECT run.*, cleanup.status cleanup_status,
+                   cleanup.removed_volumes cleanup_removed_volumes,
+                   cleanup.failed_volumes cleanup_failed_volumes
+            FROM salvage_runs run
+            LEFT JOIN rar_cleanup_runs cleanup
+              ON cleanup.salvage_run_id=run.id
+            WHERE run.id IN (
+              SELECT MAX(id) FROM salvage_runs GROUP BY rar_set_key
+            )
+            ORDER BY run.rar_set_key
+            """
+        )
+        for run in salvage_runs:
+            f.write(
+                f"{run['rar_set_key']}: bron={run['source_status']} | "
+                f"PAR2={run['par2_result']} | "
+                f"WinRAR={run['winrar_result']} | "
+                f"7-Zip={run['sevenzip_result']} | "
+                f"EXPECTED={run['expected_count']} "
+                f"PHYSICAL={run['physical_count']} "
+                f"OK={run['ok_count']} DAMAGED={run['damaged_count']} "
+                f"MISSING={run['missing_count']} "
+                f"ZERO_BYTE={run['zero_byte_count']} "
+                f"UNREADABLE={run['unreadable_count']} "
+                f"FFMPEG={run['ffmpeg_error_count']} "
+                f"DEDUPLICATED={run['deduplicated_count']} "
+                f"SIZE_MISMATCH={run['size_mismatch_count']} "
+                f"EXTRA={run['extra_count']} | "
+                f"recovery={run['recovery_item_count']} | "
+                f"{run['final_status']} | "
+                f"RAR-cleanup={run['cleanup_status'] or 'niet geregistreerd'} | "
+                f"verwijderd={run['cleanup_removed_volumes'] or '[]'} | "
+                f"cleanupfouten={run['cleanup_failed_volumes'] or '{}'}\n"
+            )
+        f.write("\n")
+
         for item in recovery_items:
             if item["bepaalde_titel"] is None:
                 reden = (
@@ -278,6 +320,89 @@ def maak_rapport(map_pad, database):
             )
         f.write("\n")
 
+        f.write("Download Queue\n")
+        f.write("------------------------------\n")
+        download_jobs = database.verbinding.execute(
+            """SELECT q.*,r.bepaalde_artiest,r.bepaalde_titel
+            FROM download_queue q JOIN recovery_items r
+              ON r.id=q.recovery_item_id
+            ORDER BY q.queue_position"""
+        ).fetchall()
+        f.write(f"Aantal jobs: {len(download_jobs)}\n")
+        for job in download_jobs:
+            f.write(
+                f"{job['queue_position']}. {job['job_id']} | "
+                f"{job['bepaalde_artiest'] or ''} - {job['bepaalde_titel'] or ''} | "
+                f"status={job['status']} | retries={job['retries']}/"
+                f"{job['max_retries']} | downloadstatus="
+                f"{job['download_status'] or '—'} | grootte="
+                f"{job['download_size'] if job['download_size'] is not None else '—'} | "
+                f"downloadtijd={job['download_duration'] if job['download_duration'] is not None else '—'} | "
+                f"locatie={job['download_path'] or '—'} | "
+                f"bronformaat={job['source_format'] or '—'} | "
+                f"processed={job['processed_path'] or '—'} | "
+                f"uitvoerformaat={job['processed_format'] or '—'} | "
+                f"codec={job['processed_codec'] or '—'} | "
+                f"bitrate={job['processed_bitrate'] or '—'} | "
+                f"sample_rate={job['processed_sample_rate'] or '—'} | "
+                f"kanalen={job['processed_channels'] or '—'} | "
+                f"bronduur={job['source_duration'] or '—'} | "
+                f"uitvoerduur={job['processed_duration'] or '—'} | "
+                f"processingstatus={job['processing_status'] or '—'} | "
+                f"warning={job['processing_warning'] or '—'} | "
+                f"processingfout={job['processing_error_message'] or '—'} | "
+                f"bron_verwijderd={bool(job['source_removed'])} | "
+                f"eindlocatie={job['final_path'] or '—'} | "
+                f"bestandsnaam={job['filename'] or '—'} | "
+                f"eindgrootte={job['final_size'] or '—'} | "
+                f"tags={job['written_tags'] or '—'} | "
+                f"album_art={bool(job['artwork_written'])} | "
+                f"recovery_voltooid={job['finalization_status'] == 'RECOVERED'} | "
+                f"finalisatiefout={job['finalization_error_message'] or '—'} | "
+                f"fout={job['last_error'] or '—'}\n"
+            )
+        f.write("\n")
+
+        f.write("YouTube bronselectie\n")
+        f.write("------------------------------\n")
+        youtube_items = database.verbinding.execute(
+            """
+            SELECT r.id, r.bepaalde_artiest, r.bepaalde_titel,
+                   r.youtube_review_status, r.selected_youtube_url,
+                   r.youtube_search_error, c.confidence, c.warnings_json,
+                   c.search_query, r.youtube_search_queries_json,
+                   (SELECT COUNT(*) FROM youtube_candidates allc
+                    WHERE allc.recovery_item_id=r.id) candidate_count,
+                   (SELECT GROUP_CONCAT(DISTINCT allq.search_query)
+                    FROM youtube_candidates allq
+                    WHERE allq.recovery_item_id=r.id) search_queries
+            FROM recovery_items r
+            LEFT JOIN youtube_candidates c
+              ON c.id=r.selected_youtube_candidate_id
+            WHERE r.youtube_last_searched IS NOT NULL
+               OR r.youtube_review_status IS NOT NULL
+            ORDER BY r.id
+            """
+        ).fetchall()
+        f.write(f"Items gezocht/beoordeeld: {len(youtube_items)}\n")
+        f.write(
+            "Klaar voor toekomstige download: "
+            f"{sum(bool(i['selected_youtube_url']) and i['youtube_review_status'] == 'SELECTED' for i in youtube_items)}\n"
+        )
+        for item in youtube_items:
+            f.write(
+                f"ID {item['id']}: {item['bepaalde_artiest'] or ''} - "
+                f"{item['bepaalde_titel'] or ''} | "
+                f"status={item['youtube_review_status'] or 'NOT_REVIEWED'} | "
+                f"queries={item['youtube_search_queries_json'] or item['search_queries'] or item['search_query'] or '—'} | "
+                f"kandidaten={item['candidate_count']} | "
+                f"url={item['selected_youtube_url'] or '—'} | "
+                f"confidence={item['confidence'] if item['confidence'] is not None else '—'} | "
+                f"warnings={item['warnings_json'] or '[]'} | "
+                f"fout={item['youtube_search_error'] or '—'}\n"
+            )
+        f.write("\n")
+
         if nul_bytes:
 
             f.write("0-byte bestanden\n")
@@ -310,5 +435,18 @@ def maak_rapport(map_pad, database):
                 f.write(f"{gegevens['relatief_pad']}\n")
 
             f.write("\n")
+
+        integrity_ok, integrity_messages = database.integrity_check()
+        try:
+            database_size = database.pad.stat().st_size
+        except OSError:
+            database_size = 0
+        f.write("Runtime-statistieken\n")
+        f.write("------------------------------\n")
+        f.write(f"Rapportduur: {perf_counter() - runtime_started:.3f} seconden\n")
+        f.write(f"Databasegrootte: {database_size} bytes\n")
+        f.write(f"Database-integriteit: {'OK' if integrity_ok else '; '.join(integrity_messages)}\n")
+        f.write(f"Recovery-items: {recovery_overzicht.get('totaal', len(recovery_items))}\n")
+        f.write("\n")
 
     return rapport

@@ -150,16 +150,81 @@ Start daarna de PySide6-interface:
 python main.py --gui
 ```
 
-De GUI biedt vier expliciete acties:
+De hoofdactie **Start** voert één recovery-set buiten de GUI-thread uit. Het
+venster toont voor `Analyse`, `PAR2`, `RAR Recovery`, `Validatie`,
+`Recovery Items`, `Spotify Search`, `Recovery Review`, `Playlist Sync` en
+`Rapport` steeds de
+toestand wachtend, actief, voltooid, overgeslagen of mislukt. De algemene
+voortgang, huidige stap en gelogde backendmeldingen worden realtime bijgewerkt.
 
-- **Analyseren** gebruikt de bestaande read-only analyse.
-- **Repareren** verwerkt uitsluitend PAR2-datasets met status `REPAIRABLE`.
-- **Uitpakken** verwerkt uitsluitend datasets met status `COMPLETE`.
-- **Rapport tonen** toont het laatst opgeslagen rapport.
+Na Spotify Search opent de **Recovery Review Wizard**. Deze toont uitsluitend
+ontbrekende of defecte recovery-items en alle opgeslagen Spotify-kandidaten.
+Selecteer de items die later naar een playlist mogen en kies waar nodig één
+Spotify-kandidaat. De selectie wordt in SQLite opgeslagen. In deze fase wordt
+nadrukkelijk nog geen Spotify-playlist gemaakt; `Playlist Sync` blijft
+uitgesteld tot een volgende workflowstap.
 
-Repareren kan bronbestanden wijzigen of aanmaken. Uitpakken maakt bestanden
-aan in de extractiedoelmap. Daarom vraagt de GUI voor beide acties altijd om
-bevestiging; analyse start nooit automatisch een reparatie of extractie.
+Een overtuigende `MATCHED`-kandidaat wordt alleen vooraf geselecteerd wanneer
+de confidence minimaal 95% is, geen bijna gelijk scorende concurrent bestaat
+en titel/album geen zichtbaar versieconflict opleveren. Low-confidence- en
+reviewgevallen blijven leeg. De wizard toont versie-indicaties zoals Live,
+Remix, Radio Edit, Extended Mix, Acoustic en Remastered, ondersteunt zoeken,
+sorteren en filters, en bewaart checkbox- en kandidaatkeuzes direct. Alleen
+een aangevinkt item met een concrete Spotify-URI telt als **Klaar voor
+playlist**. Continue waarschuwt wanneer aangevinkte items nog geen bruikbare
+match hebben.
+
+Na **Playlist voorbereiden** toont de GUI eerst een aparte bevestiging met de
+aantallen geselecteerd, gekoppeld, klaar voor playlist, zonder match en
+gedeselecteerd. De playlistnaam kan daar nog worden aangepast. Alleen de knop
+**Playlist maken** start de Spotify-mutatie; Terug en Annuleren maken niets.
+De synchronisatie gebruikt uitsluitend persistent gereviewde
+`selected_spotify_uri`-waarden van aangevinkte items, sorteert op
+jaar/week/chartpositie/bestandsnaam en dedupliceert op track-ID of URI. Een
+bestaande playlist-ID wordt hergebruikt. Het resultaatscherm toont de echte
+Spotify-URL, nieuwe en bestaande tracks, duplicaten, onvolledige keuzes en de
+syncstatus. Reviewkeuzes blijven bij API- of netwerkfouten behouden.
+
+Handmatige praktijktest:
+
+1. Haal de branch op met
+   `git pull origin feature/salvage-rar-recovery-workflow`.
+2. Activeer de virtuele omgeving, bijvoorbeeld met
+   `.\.venv\Scripts\Activate.ps1`.
+3. Start met `python main.py --gui`.
+4. Kies met **Bladeren…** een tijdelijke NZBGet-map met de originele
+   RAR/PAR2-set.
+5. Controleer vóór Start dat de recovery-set uit database, hoofd-RAR of PAR2
+   is afgeleid en niet uit een tijdelijke NZBGet-hash wanneer een betere naam
+   beschikbaar is.
+6. Klik **Start**. PowerShell blijft leeg; huidige stap, huidige activiteit,
+   voortgang en vaste tellerlabels veranderen in het venster.
+7. Controleer dat Analyse eindigt, iedere volgende fase pas daarna actief
+   wordt en geen fase permanent actief blijft.
+8. Verplaats of vergroot het venster tijdens validatie en Spotify Search om
+   te controleren dat de interface responsief blijft.
+9. Beoordeel in Recovery Review de kandidaten, test **Select All**,
+   **Select None** en **Invert Selection**, en controleer dat **Continue**
+   pas actief wordt zodra minimaal één item is geselecteerd.
+10. Rond de review af. Playlist Sync wordt zichtbaar overgeslagen en er wordt
+    in deze fase geen Spotify-playlist aangemaakt.
+11. Test een lege of niet-bestaande bron; er verschijnt een waarschuwing en
+    er start geen worker.
+12. Test zonder Spotify-credentials/netwerk; Spotify Search, Recovery Review
+    en Playlist Sync worden gemotiveerd overgeslagen, terwijl rapportage
+    beschikbaar blijft.
+13. Probeer tijdens een actieve workflow het venster te sluiten. De GUI
+    blokkeert sluiten met de melding dat de workflow nog loopt. Sluit opnieuw
+    nadat de workflow klaar is; er hoort geen `QThread destroyed`-waarschuwing
+    te verschijnen.
+
+Het eindoverzicht toont de recovery-set, recovery-items, alle Spotify-statussen,
+nieuwe en reeds aanwezige playlisttracks, playlistnaam en eindstatus. Er worden
+geen secrets, access tokens, refresh tokens of autorisatie-URL's gelogd.
+
+Het hoofdvenster toont uitsluitend de begeleide workflow. De achterliggende
+losse CLI-, review-, recovery- en Spotifyfuncties blijven beschikbaar voor
+CLI-gebruik en een eventueel later handmatig reviewscherm.
 
 # Slim zoeken en Spotify-versies
 
@@ -195,3 +260,366 @@ overschreven. De tool gebruikt bewust geen YouTube: benamingen en versies zijn
 daarvoor onvoldoende betrouwbaar. Spotify-kandidaten, scores, zoekopdrachten
 en keuzes blijven lokaal in SQLite; credentials worden niet opgeslagen of
 gelogd. Deze workflow wijzigt geen MP3-bestanden.
+
+# Fouttolerante RAR-salvage
+
+`NOT_REPAIRABLE` betekent niet dat niets meer gered kan worden. Na PAR2
+probeert de salvage-workflow zo nodig non-interactieve RAR/WinRAR-recovery.
+Daarna probeert eerst RAR/WinRAR en vervolgens 7-Zip fouttolerant uit te
+pakken. De tweede poging vult de bestaande uitvoer aan en verwijdert geen
+bestanden uit de eerste poging:
+
+```powershell
+python main.py --salvage-rar "C:\downloads"
+python main.py --salvage-rar "C:\downloads" --workspace "D:\recovery"
+python main.py --salvage-rar "C:\downloads" --rar-set "Jaarcollectie1999"
+python main.py --salvage-rar "C:\downloads" --skip-par2 --skip-winrar
+```
+
+Stel afwijkende toolpaden in met `WINRAR_PATH` en `SEVENZIP_PATH`. Voor
+RAR/WinRAR heeft de consoletool `Rar.exe` de voorkeur. Anders worden
+standaardinstallaties en daarna PATH doorzocht. Iedere recovery-poging krijgt
+een eigen runmap onder `recovery`; de samengevoegde uitvoer blijft in
+`extracted`. Bestaande salvage-output wordt niet overschreven. Originele
+RAR-volumes worden standaard pas verwijderd nadat alle verwachte uitvoer
+aanwezig en gevalideerd is en de setresultaten succesvol in SQLite zijn
+vastgelegd. Bij een fout blijven ze behouden. Dit beleid kan in Settings >
+General worden uitgeschakeld.
+
+Rebuilt/repaired multipart-sets worden als `COMPLETE`, `PARTIAL`,
+`SINGLE_VOLUME` of `INVALID` geclassificeerd. Iedere bruikbare herstelde bron
+wordt met beide tools geprobeerd, maar vervangt de originele set nooit: ook de
+originele volumes krijgen altijd beide extractiepogingen. Exitcode 0 bepaalt
+niet de eindstatus; de vergelijking met de verwachte MP3-inventaris doet dat.
+
+De eindclassificatie combineert deze vergelijking met opgeslagen
+FFmpeg-validatiefouten en 0-byte-feiten op genormaliseerd relatief pad.
+`Fysiek aanwezig` betekent daarom niet automatisch `volledig goed`:
+FFmpeg-fouten, nul-byte en andere onleesbare bestanden blijven unieke
+recovery-items, ook wanneer het bestand wel in `extracted` staat.
+
+- `COMPLETE`: alle verwachte MP3’s zijn bruikbaar.
+- `SALVAGED`: niet volledig gerepareerd, maar alle MP3’s zijn gered.
+- `PARTIAL`: een deel is gered en recovery-items zijn nodig.
+- `FAILED`: niets bruikbaars kon worden uitgepakt.
+
+De volledige vergelijking blijft in SQLite; console en GUI tonen compacte
+aantallen. Handmatige Spotify-keuzes blijven behouden.
+
+# Spotify Search Engine (fase 1)
+
+De geïsoleerde backend in `core/spotify` zoekt recovery-items uitsluitend via
+de officiële Spotify Web API. Configureer lokaal:
+
+```powershell
+$env:SPOTIFY_CLIENT_ID="..."
+$env:SPOTIFY_CLIENT_SECRET="..."
+$env:SPOTIFY_MARKET="NL"
+```
+
+De engine probeert achtereenvolgens een veldzoekopdracht, artiest plus titel
+en alleen titel. Alle kandidaten worden genormaliseerd en gescoord op artiest,
+titel en, wanneer lokaal leesbaar, duur. Alleen de hoogste score wordt op het
+recovery-item opgeslagen als `MATCHED`, `LOW_CONFIDENCE`, `NOT_FOUND` of
+`MANUAL_REVIEW`.
+
+De zoekfase wijzigt geen playlists, GUI of mediabestanden.
+
+De zoekengine verwerkt altijd precies één recovery-set. Geef bij voorkeur
+`recovery_set_id` of `archive_set_name` door; zonder selectie wordt alleen de
+meest recent bijgewerkte geldige set gekozen. Reeds automatisch verwerkte
+items worden standaard overgeslagen en zijn met `force=True` opnieuw te
+zoeken. Handmatige keuzes worden nooit overschreven. Batches boven 500 items
+vereisen expliciet `allow_large_batch=True`.
+
+```python
+voer_spotify_search_uit(
+    database,
+    archive_set_name="Jaarcollectie",
+    force=False,
+    allow_large_batch=False,
+)
+```
+
+# Spotify Playlist Manager
+
+Playlistbeheer gebruikt Authorization Code Flow met de scopes
+`playlist-read-private` en `playlist-modify-private`. Configureer in de
+Spotify Developer App exact deze redirect URI:
+
+```text
+http://127.0.0.1:8888/callback
+```
+
+Bij de eerste autorisatie opent de standaardbrowser. De tool bewaart access
+token, refresh token en verloopmoment standaard in:
+
+```text
+%LOCALAPPDATA%\Megaman Recovery Tool\spotify_user_tokens.json
+```
+
+Met `SPOTIFY_TOKEN_CACHE` kan een ander lokaal cachepad worden ingesteld. Het
+bestand wordt atomisch geschreven en alleen voor deze lokale gebruiker
+bedoeld. Verlopen tokens worden automatisch vernieuwd; handmatig instellen van
+`SPOTIFY_ACCESS_TOKEN` is niet nodig.
+
+`sync_playlist` werkt altijd op één expliciet geselecteerde recovery-set. De
+functie hergebruikt eerst de opgeslagen playlist-ID, zoekt anders in de
+playlists van de huidige gebruiker naar exact dezelfde naam en maakt als
+laatste mogelijkheid een privéplaylist. Alleen unieke recovery-items met
+status `MATCHED` worden toegevoegd; opnieuw uitvoeren is veilig.
+
+```python
+sync_playlist(database, archive_set_name="Jaarcollectie")
+```
+
+# YouTube-bronselectie (fase 2)
+
+Recovery-items zonder gekozen Spotify-match kunnen in de Recovery Review
+Wizard via **Search YouTube** worden opgezocht. Hiervoor wordt uitsluitend de
+officiële YouTube Data API v3 gebruikt; configureer de sleutel lokaal en neem
+deze nooit op in Git:
+
+```powershell
+$env:YOUTUBE_API_KEY="..."
+python main.py --gui
+```
+
+De wizard toont maximaal tien gededupliceerde kandidaten, scorecomponenten en
+waarschuwingen. Een keuze of “Geen geschikte YouTube-bron” wordt direct in
+SQLite opgeslagen en bij heropenen hersteld. **Search Again** behoudt een
+bestaande keuze, ook bij een API- of netwerkfout. Deze fase zoekt en bewaart
+alleen metadata: zij roept geen yt-dlp of FFmpeg-download aan, schrijft geen
+audio of ID3-tags en verplaatst geen bestanden.
+
+# Download Queue (fase 3)
+
+Na het kiezen van een geldige YouTube-bron zet **Prepare Downloads** ieder
+geselecteerd en afgerond recovery-item precies eenmaal in de persistente
+downloadqueue. De queue kan worden geordend, gepauzeerd, hervat, geannuleerd
+en na een herstart veilig worden herladen.
+
+De queue-infrastructuur bewaart de volledige status en herstelt een tijdens
+afsluiten actieve job bij de volgende start als `WAITING`.
+
+## Download Engine (fase 4)
+
+**Start Queue** voert de voorbereide jobs nu werkelijk sequentieel uit. De
+provider gebruikt de yt-dlp Python-API met `bestaudio/best` en schrijft iedere
+onbewerkte bron naar `downloads/temp/<job_id>/source_audio.<ext>`. Installeer
+hiervoor de bijgewerkte requirements. Er zijn bewust geen yt-dlp-
+postprocessors en geen FFmpeg-instellingen: deze fase converteert niet, maakt
+geen MP3-export, schrijft geen ID3-tags en verplaatst niets naar de
+eindlocatie.
+
+De queue toont percentage, downloadsnelheid, ETA en grootte. Pause laat de
+lopende job afmaken en voorkomt een volgende start; Resume pakt de eerstvolgende
+`WAITING`-job. Cancel vraagt de actieve provider veilig te stoppen en ruimt
+de tijdelijke jobuitvoer op. Na download verifieert de engine dat het
+bronbestand bestaat, groter is dan nul en leesbaar is voordat de status
+`DOWNLOADED` wordt opgeslagen.
+
+## Audio Processing Pipeline (fase 5)
+
+Na een geldige brondownload maakt de queue een technisch gevalideerde MP3 in
+`downloads/processed/<job_id>/`. FFmpeg schrijft eerst uitsluitend
+`processing.tmp.mp3`; pas na een geslaagde ffprobe-validatie wordt dit atomisch
+`processed_audio.mp3`. De standaardconfiguratie gebruikt `libmp3lame`, 320 kbps
+CBR, behoudt een geldige sample rate en kanaalindeling van de bron en kopieert
+geen metadata, hoofdstukken, video of thumbnails.
+
+Toolpaden en instellingen zijn lokaal configureerbaar:
+
+```powershell
+$env:FFMPEG_PATH="C:\ffmpeg\bin\ffmpeg.exe"
+$env:FFPROBE_PATH="C:\ffmpeg\bin\ffprobe.exe"
+$env:OUTPUT_AUDIO_FORMAT="mp3"
+$env:MP3_BITRATE_KBPS="320"
+$env:PROCESSING_TIMEOUT_SECONDS="1800"
+$env:KEEP_SOURCE_AFTER_PROCESSING="true"
+```
+
+Zonder expliciete paden worden eerst PATH en daarna de bestaande
+projectconfiguratie gebruikt. Ontbrekende tools leveren een opgeslagen
+jobfout op en laten de brondownload intact. Deze fase schrijft geen ID3-tags,
+voegt geen albumcover toe, bepaalt geen definitieve bestandsnaam, verplaatst
+niets naar weekmappen en markeert geen recovery-item als volledig hersteld.
+
+## Metadata & Finalization Pipeline (fase 6)
+
+Na `PROCESSED` gebruikt de finalisatiefase uitsluitend de expliciet opgeslagen
+Spotify-keuze en recoverygegevens. YouTube blijft alleen de audiobron. Mutagen
+schrijft titel, artiest, album, albumartiest, track/disc (indien bekend), jaar,
+genre (indien bekend), de herstelcomment en de hoogst beschikbare opgeslagen
+Spotify-cover als JPEG/APIC. Covers worden per URL gecachet.
+
+Het bestand wordt eerst als verborgen stagingbestand in de doelmap gekopieerd,
+daar van metadata voorzien en opnieuw gevalideerd. Pas daarna wordt het
+atomisch gepubliceerd en wordt `processed_audio.mp3` verwijderd. Bij iedere
+fout blijft de gevalideerde processing-uitvoer behouden. Standaard ontstaat:
+
+```text
+Recovered/<jaar>/Week <week>/<artiest> - <titel>.mp3
+```
+
+Lokale configuratie gebeurt zonder ontwikkelpaden in Git:
+
+```powershell
+$env:OUTPUT_ROOT="D:\Recovered"
+$env:FILENAME_TEMPLATE="{artist} - {title}.mp3"
+$env:FOLDER_TEMPLATE="{year}/Week {week}"
+$env:COLLISION_POLICY="Rename"  # Rename, Overwrite of Skip
+$env:MAX_FINAL_PATH_LENGTH="240"
+$env:ARTWORK_CACHE="downloads/artwork_cache"
+```
+
+Ook `{track} - {artist} - {title}` en
+`{year}-{week} - {artist} - {title}` worden ondersteund. Na een succesvolle
+ID3/APIC-controle krijgt de job `RECOVERED` en wordt het recovery-item als
+geplaatst en verwerkt gemarkeerd.
+
+## Application Settings (fase 7)
+
+Alle runtime-instellingen worden centraal beheerd door `SettingsManager` en
+versioned opgeslagen in `config/settings.json`. Het bestand wordt automatisch
+aangemaakt, atomisch bijgewerkt en bij nieuwe versies niet-destructief
+gemigreerd. Bestaande environmentvariabelen blijven als compatibele override
+werken; tokens blijven in de bestaande beveiligde tokencache.
+
+Open in de GUI het menu **Settings**. De tabs General, Spotify, YouTube,
+Downloads, Audio en Metadata valideren wijzigingen direct. Diagnostics toont
+Python, SQLite, Mutagen, yt-dlp, FFmpeg/ffprobe en de configuratiestatus van
+Spotify en YouTube.
+
+**Export Settings** exporteert uitsluitend niet-geheime instellingen. Spotify
+tokens, Spotify client secret, YouTube API-key en caches worden niet
+meegenomen. **Import Settings** migreert oudere versies en behoudt lokaal
+aanwezige secrets. **Reset to Defaults** herstelt de ingebouwde defaults.
+
+```json
+{
+  "version": 2,
+  "general": {
+    "delete_original_rars_after_success": true
+  },
+  "spotify": {},
+  "youtube": {},
+  "download": {},
+  "audio": {},
+  "metadata": {}
+}
+```
+
+## Production hardening (fase 8)
+
+De applicatie initialiseert centraal roterende logging in `logs/`. Iedere regel
+bevat tijdstip, niveau, threadnaam en module. Bekende secretvelden worden voor
+het schrijven geredacteerd. Onverwachte fouten uit zowel de hoofdthread als
+Python-achtergrondthreads krijgen een atomisch JSON-crashrapport onder
+`logs/crash/`; de GUI toont daarbij een korte, niet-technische melding.
+
+SQLite gebruikt foreign keys, WAL, een busy-timeout en expliciete
+transactiecontexten met rollback/savepoints. `integrity_check()` is beschikbaar
+voor diagnostiek en rapporten. Queue-claims gebeuren atomisch met
+`BEGIN IMMEDIATE`, zodat meerdere workers niet dezelfde job kunnen claimen.
+De GUI materialiseert maximaal 1000 queue-rijen tegelijk; totalen en voortgang
+komen uit databaseaggregaties. Backendcode kan grote queues via `iter_jobs()`
+in batches verwerken.
+
+### Architectuur- en moduleoverzicht
+
+- `core/reliability/`: logging, redactie, crashrapporten en exception hooks;
+- `core/settings/`: defaults, JSON-opslag, migraties en validatie;
+- `core/download*` en `core/audio/`: persistente queue, download en processing;
+- `core/metadata/`: Spotify-metadata, artworkcache en atomische finalisatie;
+- `core/spotify/` en `core/youtube/`: providerclients, matching en reviewdata;
+- `gui/`: Qt-widgets, workers en uitsluitend signaalgestuurde GUI-updates;
+- `database.py`: SQLite-schema, migraties, transacties en integrity checks.
+
+### Ontwikkelaarsinformatie
+
+Gebruik voor iedere wijziging een tijdelijke database en injecteer externe
+clients/processen in tests. Schrijf nooit tokens of API-sleutels naar fixtures
+of logs. Nieuwe schema- en settingsvelden moeten niet-destructief migreren.
+Controleer vóór een commit minimaal:
+
+```powershell
+python -m pytest
+python -m compileall -q core gui tests
+python main.py --help
+python main.py --demo
+git diff --check
+```
+
+## Installatie voor eindgebruikers
+
+Download bij een release het Windows-artifact en start
+`MegamanRecoveryTool.exe`. Voor broninstallatie:
+
+```powershell
+git clone https://github.com/rje0475/Megaman-Recovery-Tool.git
+cd "Megaman Recovery Tool"
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python main.py --gui
+```
+
+WinRAR/RAR, 7-Zip, FFmpeg en ffprobe blijven externe tools en worden via
+**Settings** geconfigureerd. Spotify-tokens worden apart van `settings.json`
+opgeslagen.
+
+## Releasebeheer en backup
+
+`python main.py --version` toont de centrale Semantic Version, build en commit.
+Gebruik **File → Backup Project** voor een ZIP met database en settings;
+downloads, caches en tijdelijke bestanden worden nooit meegenomen. Restore
+maakt vóór overschrijven een lokale pre-restorekopie. **Tools → Health Check**
+en **Self Test** zijn volledig diagnostisch en wijzigen geen recoverydata.
+
+Een lokale windowed build maken:
+
+```powershell
+python -m pip install -r requirements-build.txt
+python -m PyInstaller --clean --noconfirm megaman_recovery.spec
+```
+
+Uitvoer: `dist/MegamanRecoveryTool/MegamanRecoveryTool.exe`. De release gebruikt
+bewust een windowed onedir-build: alle Qt-plug-ins (waaronder `qwindows.dll`)
+staan zichtbaar naast de executable en er is geen kwetsbare onefile-
+uitpakfase vóór Python-startup.
+
+## Screenshots
+
+> Plaatsaanduiding: hoofdworkflow met voortgang en herstelstatistieken.
+
+> Plaatsaanduiding: Recovery Review met Spotify- en YouTube-kandidaten.
+
+> Plaatsaanduiding: Settings, Diagnostics en Project Health Check.
+
+## Veelgestelde vragen
+
+**Betekent NOT_REPAIRABLE dat niets gered kan worden?**  Nee. De workflow
+probeert daarna WinRAR/RAR en 7-Zip als aanvullende salvagebronnen.
+
+**Worden originele RAR-bestanden verwijderd?**  Standaard alleen na een
+volledig succesvolle, gevalideerde en geregistreerde recovery van die ene
+archiefset. Bij iedere recovery- of cleanupfout blijven de nog aanwezige
+volumes behouden. Uitschakelen kan via Settings > General.
+
+**Zitten downloads in een projectbackup?**  Nee. Alleen database, settings en
+optioneel logs worden opgenomen.
+
+**Waarom wordt een Spotify-resultaat niet automatisch gekozen?**  Bij twijfel
+is een gemiste match veiliger dan een verkeerde match; beoordeel het item in
+Recovery Review.
+
+## Troubleshooting
+
+- Start **Tools → Health Check** en controleer FFmpeg, ffprobe en schrijfrechten.
+- Controleer `logs/megaman-recovery.log`; deel alleen geredacteerde regels.
+- Bij een onverwachte fout staat een JSON-rapport in `logs/crash/`.
+- Een corrupte `settings.json` wordt hernoemd naar `settings.json.corrupt-*` en
+  automatisch vervangen door geldige defaults.
+- Gebruik bij databaseproblemen eerst Backup Project en controleer daarna de
+  gerapporteerde SQLite-integriteitsstatus.
