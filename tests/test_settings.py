@@ -148,19 +148,91 @@ class SettingsTests(unittest.TestCase):
     def test_explicit_diagnostic_and_path_buttons_still_work(self):
         values = {
             "Python": "3.x", "SQLite": "3.x", "Mutagen": "1.x",
-            "yt-dlp": "1.x", "FFmpeg": "ffmpeg version",
-            "ffprobe": "ffprobe version", "Spotify auth": "ok",
-            "YouTube API": "ok",
+            "yt-dlp": "1.x", "FFmpeg": "ffmpeg version 8.1.2 long build details",
+            "ffprobe": "ffprobe version 8.1.2 long build details",
+            "Spotify auth": "geconfigureerd", "YouTube API": "geconfigureerd",
         }
         with patch.object(self.manager, "diagnostics", return_value=values) as diagnostics, \
                 patch.object(self.manager, "validate_external", return_value=()) as external:
             dialog = SettingsDialog(manager=self.manager)
             try:
+                dialog.show()
+                self.app.processEvents()
                 dialog.diagnostics_refresh_button.click()
                 dialog.external_validation_button.click()
                 diagnostics.assert_called_once_with()
                 external.assert_called_once_with()
-                self.assertEqual(dialog.diagnostic_labels["FFmpeg"].text(), "ffmpeg version")
+                self.assertEqual(dialog.diagnostic_labels["FFmpeg"].text(), "Versie 8.1.2")
+            finally:
+                dialog.close()
+
+    def test_diagnostics_initially_show_not_checked_with_accessible_status(self):
+        dialog = SettingsDialog(manager=self.manager)
+        try:
+            self.assertTrue(dialog.diagnostics_refresh_button.isEnabled())
+            self.assertTrue(dialog.external_validation_button.isEnabled())
+            for name in dialog.diagnostic_labels:
+                self.assertEqual(
+                    dialog.diagnostic_status_labels[name].text(),
+                    "Niet gecontroleerd",
+                )
+                self.assertEqual(
+                    dialog.diagnostic_labels[name].text(),
+                    "Niet gecontroleerd",
+                )
+        finally:
+            dialog.close()
+
+    def test_diagnostic_summary_is_short_and_full_details_remain_available(self):
+        long_ffmpeg = "ffmpeg version 8.1.2 " + "technische-buildinformatie " * 20
+        values = {
+            "Python": "3.12.13", "SQLite": "3.50.4", "Mutagen": "1.48.1",
+            "yt-dlp": "2026.07.04", "FFmpeg": long_ffmpeg,
+            "ffprobe": "ffprobe version 8.1.2 volledige uitvoer",
+            "Spotify auth": "niet geconfigureerd",
+            "YouTube API": "niet geconfigureerd",
+        }
+        with patch.object(self.manager, "diagnostics", return_value=values):
+            dialog = SettingsDialog(manager=self.manager)
+            try:
+                dialog.show()
+                self.app.processEvents()
+                dialog.diagnostics_refresh_button.click()
+                self.assertEqual(dialog.diagnostic_labels["FFmpeg"].text(), "Versie 8.1.2")
+                self.assertEqual(dialog.diagnostic_labels["ffprobe"].text(), "Versie 8.1.2")
+                self.assertIn(long_ffmpeg, dialog.diagnostics_details.toPlainText())
+                self.assertTrue(dialog.diagnostics_details.isHidden())
+                dialog.diagnostics_details_button.click()
+                self.assertFalse(dialog.diagnostics_details.isHidden())
+                self.assertEqual(dialog.diagnostics_details_button.text(), "Details verbergen")
+            finally:
+                dialog.close()
+
+    def test_statuses_are_textual_and_service_labels_are_consistent(self):
+        values = {
+            "Python": "3.12.13", "SQLite": "fout: beschadigd",
+            "Mutagen": "niet geïnstalleerd", "yt-dlp": "2026.07.04",
+            "FFmpeg": "ffmpeg version 8.1.2", "ffprobe": "niet gevonden",
+            "Spotify auth": "niet geconfigureerd",
+            "YouTube API": "niet geconfigureerd",
+        }
+        with patch.object(self.manager, "diagnostics", return_value=values):
+            dialog = SettingsDialog(manager=self.manager)
+            try:
+                dialog.refresh_diagnostics()
+                statuses = {
+                    item.text() for item in dialog.diagnostic_status_labels.values()
+                }
+                self.assertTrue({"PASS", "WARNING", "ERROR"} <= statuses)
+                self.assertEqual(dialog.diagnostic_labels["Spotify auth"].text(), "Niet geconfigureerd")
+                self.assertEqual(dialog.diagnostic_labels["YouTube API"].text(), "Niet geconfigureerd")
+                names = {
+                    dialog.diagnostics_table.item(row, 0).text()
+                    for row in range(dialog.diagnostics_table.rowCount())
+                }
+                self.assertIn("Spotify", names)
+                self.assertIn("YouTube", names)
+                self.assertNotIn("Spotify auth", names)
             finally:
                 dialog.close()
 

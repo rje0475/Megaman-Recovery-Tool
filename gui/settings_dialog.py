@@ -1,12 +1,16 @@
 """PySide6-instellingenvenster voor de centrale SettingsManager."""
 
 import logging
+import re
 import time
 
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
-    QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QSpinBox,
-    QTabWidget, QVBoxLayout, QWidget,
+    QHeaderView, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPlainTextEdit,
+    QPushButton, QSpinBox, QTableWidget, QTableWidgetItem, QTabWidget,
+    QVBoxLayout, QWidget,
 )
 
 from core.settings import SettingsValidationError, get_settings_manager
@@ -55,6 +59,16 @@ DIAGNOSTIC_NAMES = (
     "Python", "SQLite", "Mutagen", "yt-dlp", "FFmpeg", "ffprobe",
     "Spotify auth", "YouTube API",
 )
+DIAGNOSTIC_DISPLAY_NAMES = {
+    "Spotify auth": "Spotify",
+    "YouTube API": "YouTube",
+}
+STATUS_COLORS = {
+    "PASS": QColor("#187a27"),
+    "WARNING": QColor("#9a6700"),
+    "ERROR": QColor("#b00020"),
+    "Niet gecontroleerd": QColor("#666666"),
+}
 
 
 class SettingsDialog(QDialog):
@@ -181,30 +195,115 @@ class SettingsDialog(QDialog):
     def _build_diagnostics(self):
         page = QWidget()
         layout = QVBoxLayout(page)
-        form = QFormLayout()
+        explanation = QLabel(
+            "Diagnostiek wordt alleen uitgevoerd wanneer u op "
+            "‘Diagnostiek vernieuwen’ klikt."
+        )
+        explanation.setWordWrap(True)
+        layout.addWidget(explanation)
+        table = QTableWidget(len(DIAGNOSTIC_NAMES), 3)
+        table.setHorizontalHeaderLabels(("Onderdeel", "Status", "Details"))
+        table.verticalHeader().setVisible(False)
+        table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+        table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self.diagnostic_labels = {}
-        for name in DIAGNOSTIC_NAMES:
-            label = QLabel("Niet gecontroleerd")
-            self.diagnostic_labels[name] = label
-            form.addRow(name, label)
-        layout.addLayout(form)
+        self.diagnostic_status_labels = {}
+        for row, name in enumerate(DIAGNOSTIC_NAMES):
+            display_name = DIAGNOSTIC_DISPLAY_NAMES.get(name, name)
+            name_item = QTableWidgetItem(display_name)
+            status_item = QTableWidgetItem("Niet gecontroleerd")
+            status_item.setForeground(STATUS_COLORS["Niet gecontroleerd"])
+            detail_item = QTableWidgetItem("Niet gecontroleerd")
+            if display_name in {"Spotify", "YouTube"}:
+                tooltip = "Configureer dit onderdeel via het bijbehorende tabblad."
+                name_item.setToolTip(tooltip)
+                detail_item.setToolTip(tooltip)
+            table.setItem(row, 0, name_item)
+            table.setItem(row, 1, status_item)
+            table.setItem(row, 2, detail_item)
+            self.diagnostic_status_labels[name] = status_item
+            self.diagnostic_labels[name] = detail_item
+        table.resizeRowsToContents()
+        self.diagnostics_table = table
+        layout.addWidget(table)
+
+        self.diagnostics_details = QPlainTextEdit()
+        self.diagnostics_details.setReadOnly(True)
+        self.diagnostics_details.setPlaceholderText(
+            "Vernieuw de diagnostiek om technische details te bekijken."
+        )
+        self.diagnostics_details.setVisible(False)
+        self.diagnostics_details.setMaximumHeight(150)
+        layout.addWidget(self.diagnostics_details)
+
+        button_row = QHBoxLayout()
         refresh = QPushButton("Diagnostiek vernieuwen")
         refresh.clicked.connect(self.refresh_diagnostics)
-        layout.addWidget(refresh)
+        button_row.addWidget(refresh)
         validate = QPushButton("Externe paden controleren")
         validate.clicked.connect(self.validate_external)
-        layout.addWidget(validate)
+        button_row.addWidget(validate)
+        details = QPushButton("Details tonen")
+        details.setCheckable(True)
+        details.toggled.connect(self._toggle_diagnostic_details)
+        button_row.addWidget(details)
+        layout.addLayout(button_row)
         layout.addStretch(1)
         self.diagnostics_refresh_button = refresh
         self.external_validation_button = validate
+        self.diagnostics_details_button = details
         self.tabs.addTab(page, "Diagnostics")
+
+    @staticmethod
+    def _diagnostic_presentation(name, raw_value):
+        raw = str(raw_value or "onbekend").strip()
+        folded = raw.casefold()
+        if "niet geconfigureerd" in folded:
+            return "WARNING", "Niet geconfigureerd"
+        if "niet gevonden" in folded or "niet geïnstalleerd" in folded:
+            return "WARNING", "Niet gevonden"
+        if folded.startswith(("error", "fout")):
+            return "ERROR", "Controle mislukt"
+        if name in {"FFmpeg", "ffprobe"}:
+            match = re.search(r"(?i)version\s+([^\s]+)", raw)
+            return "PASS", f"Versie {match.group(1)}" if match else "Gevonden"
+        if name in {"Spotify auth", "YouTube API"}:
+            return "PASS", "Geconfigureerd"
+        summary = raw if len(raw) <= 72 else raw[:69].rstrip() + "…"
+        return "PASS", summary
+
+    def _toggle_diagnostic_details(self, visible):
+        self.diagnostics_details.setVisible(visible)
+        self.diagnostics_details_button.setText(
+            "Details verbergen" if visible else "Details tonen"
+        )
 
     def refresh_diagnostics(self):
         """Zware versie- en toolchecks draaien uitsluitend expliciet."""
         self.diagnostics_refresh_button.setEnabled(False)
         try:
             values = self.manager.diagnostics()
-            for name, label in self.diagnostic_labels.items():
-                label.setText(values.get(name, "onbekend"))
+            technical_details = []
+            audio = self.manager.section("audio")
+            for name, detail_item in self.diagnostic_labels.items():
+                raw = values.get(name, "onbekend")
+                status, summary = self._diagnostic_presentation(name, raw)
+                status_item = self.diagnostic_status_labels[name]
+                status_item.setText(status)
+                status_item.setForeground(STATUS_COLORS[status])
+                detail_item.setText(summary)
+                detail_item.setToolTip(str(raw))
+                technical_details.append(
+                    f"{DIAGNOSTIC_DISPLAY_NAMES.get(name, name)}\n{raw}"
+                )
+            for label, key in (("FFmpeg-pad", "ffmpeg_path"),
+                               ("ffprobe-pad", "ffprobe_path")):
+                technical_details.append(
+                    f"{label}\n{audio.get(key) or 'Niet expliciet ingesteld'}"
+                )
+            self.diagnostics_details.setPlainText("\n\n".join(technical_details))
         finally:
             self.diagnostics_refresh_button.setEnabled(True)
