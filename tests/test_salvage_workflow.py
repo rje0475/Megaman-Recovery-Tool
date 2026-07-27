@@ -633,6 +633,49 @@ class OrchestratorTest(unittest.TestCase):
             wx.assert_called_once()
             extract.assert_called_once()
 
+    def test_extractiefout_behoudt_alle_originele_rar_volumes(self):
+        """Originele archieven blijven onaangetast zolang recovery niet slaagt."""
+        with tempfile.TemporaryDirectory() as tijdelijke_map:
+            root = Path(tijdelijke_map)
+            volumes = tuple(
+                root / f"Veilige Set.part{nummer:02d}.rar"
+                for nummer in range(1, 4)
+            )
+            inhoud = {}
+            for nummer, volume in enumerate(volumes, start=1):
+                inhoud[volume] = f"origineel-volume-{nummer}".encode("ascii")
+                volume.write_bytes(inhoud[volume])
+
+            db_pad = root / "test.db"
+            db = maak_database(db_pad)
+            bewaar_rar_set(db, "veilige set", volumes[0], True)
+            db.sluit()
+            tool_pad = root / "tool.exe"
+            tool_pad.write_bytes(b"tool")
+            tool = ToolResultaat("test", tool_pad, True, "TEST")
+
+            with (
+                patch("core.salvage_workflow.detecteer_winrar",
+                      return_value=tool),
+                patch("core.salvage_workflow.detecteer_7zip",
+                      return_value=tool),
+                patch(
+                    "core.salvage_workflow.winrar_salvage_extract",
+                    side_effect=RuntimeError("gesimuleerde extractiefout"),
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError, "gesimuleerde extractiefout"
+                ):
+                    voer_salvage_workflow_uit(
+                        root, database_pad=db_pad, skip_par2=True,
+                        skip_winrar=True, uitvoer=StringIO(),
+                    )
+
+            for volume in volumes:
+                self.assertTrue(volume.is_file(), volume)
+                self.assertEqual(volume.read_bytes(), inhoud[volume])
+
     def test_rebuilt_wordt_gekozen_beide_extracties_draaien_en_rescan_bepaalt_items(
         self,
     ):
