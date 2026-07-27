@@ -794,6 +794,25 @@ class SQLiteDatabase:
             )
             """
         )
+        self.verbinding.execute(
+            """
+            CREATE TABLE IF NOT EXISTS rar_cleanup_runs (
+                id INTEGER PRIMARY KEY,
+                salvage_run_id INTEGER NOT NULL UNIQUE,
+                rar_set_key TEXT NOT NULL,
+                source_root TEXT NOT NULL,
+                planned_volumes TEXT NOT NULL,
+                removed_volumes TEXT NOT NULL DEFAULT '[]',
+                failed_volumes TEXT NOT NULL DEFAULT '{}',
+                status TEXT NOT NULL,
+                reason TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (salvage_run_id) REFERENCES salvage_runs(id)
+                    ON DELETE CASCADE
+            )
+            """
+        )
         kolommen = {
             rij["name"]
             for rij in self.verbinding.execute(

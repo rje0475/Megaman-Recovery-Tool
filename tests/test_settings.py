@@ -88,6 +88,9 @@ class SettingsTests(unittest.TestCase):
             names = [dialog.tabs.tabText(i) for i in range(dialog.tabs.count())]
             self.assertEqual(names, ["General", "Spotify", "YouTube", "Downloads",
                                      "Audio", "Metadata", "Diagnostics"])
+            self.assertTrue(dialog.widgets[(
+                "general", "delete_original_rars_after_success"
+            )].isChecked())
             dialog.widgets[("metadata", "filename_template")].setText("")
             self.assertIn("Ongeldig", dialog.validation_label.text())
         finally:

@@ -1,12 +1,13 @@
 """Defaults en huidige versie voor applicatie-instellingen."""
 
-CURRENT_VERSION = 1
+CURRENT_VERSION = 2
 
 DEFAULTS = {
     "version": CURRENT_VERSION,
     "general": {"language": "nl", "theme": "system", "log_level": "INFO",
                 "automatic_updates": False, "worker_threads": 1,
-                "parallel_downloads": 1},
+                "parallel_downloads": 1,
+                "delete_original_rars_after_success": True},
     "spotify": {"client_id": "", "client_secret": "",
                 "redirect_uri": "http://127.0.0.1:8888/callback",
                 "playlist_name_template": "{recovery_set}",

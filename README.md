@@ -280,8 +280,11 @@ Stel afwijkende toolpaden in met `WINRAR_PATH` en `SEVENZIP_PATH`. Voor
 RAR/WinRAR heeft de consoletool `Rar.exe` de voorkeur. Anders worden
 standaardinstallaties en daarna PATH doorzocht. Iedere recovery-poging krijgt
 een eigen runmap onder `recovery`; de samengevoegde uitvoer blijft in
-`extracted`. Bestaande salvage-output en originele RAR-volumes worden nooit
-verwijderd of overschreven.
+`extracted`. Bestaande salvage-output wordt niet overschreven. Originele
+RAR-volumes worden standaard pas verwijderd nadat alle verwachte uitvoer
+aanwezig en gevalideerd is en de setresultaten succesvol in SQLite zijn
+vastgelegd. Bij een fout blijven ze behouden. Dit beleid kan in Settings >
+General worden uitgeschakeld.
 
 Rebuilt/repaired multipart-sets worden als `COMPLETE`, `PARTIAL`,
 `SINGLE_VOLUME` of `INVALID` geclassificeerd. Iedere bruikbare herstelde bron
@@ -495,8 +498,10 @@ aanwezige secrets. **Reset to Defaults** herstelt de ingebouwde defaults.
 
 ```json
 {
-  "version": 1,
-  "general": {},
+  "version": 2,
+  "general": {
+    "delete_original_rars_after_success": true
+  },
   "spotify": {},
   "youtube": {},
   "download": {},
@@ -597,8 +602,10 @@ uitpakfase vóór Python-startup.
 **Betekent NOT_REPAIRABLE dat niets gered kan worden?**  Nee. De workflow
 probeert daarna WinRAR/RAR en 7-Zip als aanvullende salvagebronnen.
 
-**Worden originele RAR-bestanden gewijzigd?**  Nee. Recovery en extractie
-gebruiken afzonderlijke workspaces en uitvoermappen.
+**Worden originele RAR-bestanden verwijderd?**  Standaard alleen na een
+volledig succesvolle, gevalideerde en geregistreerde recovery van die ene
+archiefset. Bij iedere recovery- of cleanupfout blijven de nog aanwezige
+volumes behouden. Uitschakelen kan via Settings > General.
 
 **Zitten downloads in een projectbackup?**  Nee. Alleen database, settings en
 optioneel logs worden opgenomen.

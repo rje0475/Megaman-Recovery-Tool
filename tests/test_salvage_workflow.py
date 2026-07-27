@@ -676,6 +676,112 @@ class OrchestratorTest(unittest.TestCase):
                 self.assertTrue(volume.is_file(), volume)
                 self.assertEqual(volume.read_bytes(), inhoud[volume])
 
+    def test_volledig_succes_verwijdert_pas_na_databasecommit(self):
+        with tempfile.TemporaryDirectory() as tijdelijke_map:
+            root = Path(tijdelijke_map)
+            archive = root / "Voltooid.rar"
+            archive.write_bytes(b"origineel")
+            other = root / "Andere.rar"
+            other.write_bytes(b"ander")
+            db_pad = root / "test.db"
+            db = maak_database(db_pad)
+            bewaar_rar_set(db, "voltooid", archive, True)
+            vervang_rar_inventory_items(db, "voltooid", archive, [{
+                "verwacht_rel_pad": "track.mp3",
+                "verwacht_rel_pad_norm": "track.mp3",
+                "verwachte_bestandsnaam": "track.mp3",
+                "verwachte_map": "",
+                "verwachte_grootte": 3,
+            }])
+            db.verbinding.execute(
+                """
+                INSERT INTO par_inventory (
+                  par_set_key, gekoppelde_rar_set_key, par_startbestand,
+                  status, bijgewerkt_op
+                ) VALUES ('voltooid','voltooid','set.par2','COMPLETE','nu')
+                """
+            )
+            db.verbinding.commit()
+            db.sluit()
+            tool_pad = root / "tool.exe"
+            tool_pad.write_bytes(b"tool")
+            tool = ToolResultaat("test", tool_pad, True, "TEST")
+
+            def vergelijking(_verwacht, extracted):
+                bestand = Path(extracted) / "track.mp3"
+                bestand.parent.mkdir(parents=True, exist_ok=True)
+                bestand.write_bytes(b"mp3")
+                return VergelijkResultaat((VergelijkItem(
+                    "track.mp3", "OK", bestand, 3, 3, "ok"
+                ),), ())
+
+            log = StringIO()
+            with (
+                patch("core.salvage_workflow.detecteer_winrar", return_value=tool),
+                patch("core.salvage_workflow.detecteer_7zip", return_value=tool),
+                patch("core.salvage_workflow.winrar_salvage_extract",
+                      return_value=SimpleNamespace(status="SUCCESS", exitcode=0)),
+                patch("core.salvage_workflow.salvage_extract",
+                      return_value=SimpleNamespace(
+                          status="SUCCESS", exitcode=0, data_fouten=()
+                      )),
+                patch("core.salvage_workflow.vergelijk_extractie",
+                      side_effect=vergelijking),
+            ):
+                result = voer_salvage_workflow_uit(
+                    root, rar_set="voltooid", database_pad=db_pad,
+                    skip_par2=True, cleanup_originals=True, uitvoer=log,
+                )[0]
+            self.assertEqual(result.eindstatus, "COMPLETE")
+            self.assertEqual(result.cleanup_status, "removed")
+            self.assertFalse(archive.exists())
+            self.assertEqual(other.read_bytes(), b"ander")
+            controle = SQLiteDatabase(db_pad)
+            try:
+                cleanup = controle.verbinding.execute(
+                    "SELECT status FROM rar_cleanup_runs"
+                ).fetchone()
+                self.assertEqual(cleanup["status"], "removed")
+            finally:
+                controle.sluit()
+            self.assertIn("1 originele RAR-volumes verwijderd", log.getvalue())
+
+    def test_validatie_of_databasefout_behoudt_originele_volumes(self):
+        for fase in ("validatie", "database"):
+            with self.subTest(fase=fase), tempfile.TemporaryDirectory() as tijdelijke_map:
+                root = Path(tijdelijke_map)
+                archive = root / "Bewaren.part01.rar"
+                archive.write_bytes(b"origineel")
+                db_pad = root / "test.db"
+                db = maak_database(db_pad)
+                bewaar_rar_set(db, "bewaren", archive, True)
+                db.sluit()
+                tool = ToolResultaat("test", root / "tool.exe", True, "TEST")
+                tool.pad.write_bytes(b"tool")
+                patches = [
+                    patch("core.salvage_workflow.detecteer_winrar", return_value=tool),
+                    patch("core.salvage_workflow.detecteer_7zip", return_value=tool),
+                    patch("core.salvage_workflow.winrar_salvage_extract",
+                          return_value=SimpleNamespace(status="SUCCESS", exitcode=0)),
+                    patch("core.salvage_workflow.salvage_extract",
+                          return_value=SimpleNamespace(
+                              status="SUCCESS", exitcode=0, data_fouten=()
+                          )),
+                ]
+                failing = patch(
+                    "core.salvage_workflow.vergelijk_extractie"
+                    if fase == "validatie" else "core.salvage_workflow._bewaar_run",
+                    side_effect=RuntimeError(f"{fase} mislukt"),
+                )
+                with patches[0], patches[1], patches[2], patches[3], failing:
+                    with self.assertRaisesRegex(RuntimeError, "mislukt"):
+                        voer_salvage_workflow_uit(
+                            root, database_pad=db_pad, skip_par2=True,
+                            skip_winrar=True, cleanup_originals=True,
+                            uitvoer=StringIO(),
+                        )
+                self.assertEqual(archive.read_bytes(), b"origineel")
+
     def test_rebuilt_wordt_gekozen_beide_extracties_draaien_en_rescan_bepaalt_items(
         self,
     ):

@@ -50,8 +50,12 @@ class ProductionHardeningTests(unittest.TestCase):
         path.parent.mkdir(parents=True)
         path.write_text("{kapot", encoding="utf-8")
         manager = SettingsManager(path, environment={})
-        self.assertEqual(manager.settings.version, 1)
-        self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["version"], 1)
+        from core.settings.defaults import CURRENT_VERSION
+        self.assertEqual(manager.settings.version, CURRENT_VERSION)
+        self.assertEqual(
+            json.loads(path.read_text(encoding="utf-8"))["version"],
+            CURRENT_VERSION,
+        )
         self.assertEqual(len(list(path.parent.glob("settings.json.corrupt-*"))), 1)
 
     def test_database_transaction_rolls_back_and_integrity_is_ok(self):

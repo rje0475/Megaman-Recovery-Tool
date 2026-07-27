@@ -1,12 +1,17 @@
 import re
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 
 from core.external_tools import detecteer_7zip, detecteer_winrar
 from core.progress import maak_progress
+from core.rar_cleanup import (
+    hervat_rar_cleanups,
+    registreer_rar_cleanup,
+    voer_rar_cleanup_uit,
+)
 from core.salvage_classification import classificeer_salvage_resultaat
 from core.salvage_compare import vergelijk_extractie
 from core.salvage_extractor import salvage_extract, winrar_salvage_extract
@@ -50,10 +55,23 @@ class SalvageSamenvatting:
     spotify_recovery_items: int
     eindstatus: str
     extractiemap: Path
+    cleanup_status: str = "retained"
+    cleanup_removed: int = 0
 
 
 class SalvageFout(RuntimeError):
     pass
+
+
+class _CleanupLogger:
+    def __init__(self, uitvoer):
+        self.uitvoer = uitvoer
+
+    def info(self, message, *args):
+        self.uitvoer.write((message % args) + "\n")
+
+    def error(self, message, *args):
+        self.uitvoer.write((message % args) + "\n")
 
 
 def _toon_commando(commando):
@@ -417,13 +435,56 @@ def _bewaar_run(
             """, (cursor.lastrowid, extra.name, str(extra))
         )
     database.verbinding.commit()
+    return cursor.lastrowid
+
+
+def _cleanup_controles(set_, samenvatting, vergelijking, winrar, extractie):
+    controles = {
+        "alle_volumes": (
+            classificeer_archive_set(
+                set_.volumes, len(set_.volumes), "origineel"
+            ).classificatie == "COMPLETE"
+        ),
+        "workflow_succes": samenvatting.eindstatus in {"COMPLETE", "SALVAGED"},
+        "alle_verwachte_output": (
+            samenvatting.verwacht > 0
+            and samenvatting.fysiek_aanwezig >= samenvatting.verwacht
+            and samenvatting.ontbrekend == 0
+        ),
+        "audio_validatie": (
+            samenvatting.beschadigd_aanwezig == 0
+            and samenvatting.nul_bytes == 0
+            and samenvatting.onleesbaar == 0
+            and samenvatting.ffmpeg_fouten == 0
+        ),
+        "extractie_voltooid": getattr(extractie, "status", None) == "SUCCESS",
+        "recovery_voltooid": getattr(winrar, "status", None) in {
+            "SUCCESS", "NOT_APPLICABLE",
+        },
+        "bestanden_leesbaar": True,
+        "output_buiten_archief": True,
+    }
+    volume_paths = {Path(path).resolve() for path in set_.volumes}
+    for item in vergelijking.items:
+        bestand = Path(item.bestand) if item.bestand else None
+        if item.status != "OK" or not bestand or not bestand.is_file():
+            controles["bestanden_leesbaar"] = False
+            continue
+        try:
+            with bestand.open("rb") as stream:
+                stream.read(1)
+            if bestand.resolve() in volume_paths:
+                controles["output_buiten_archief"] = False
+        except OSError:
+            controles["bestanden_leesbaar"] = False
+    return controles
 
 
 def voer_salvage_workflow_uit(
     bronmap, workspace=None, rar_set=None, skip_par2=False,
     skip_winrar=False, no_spotify=False, database_pad=DATABASE_BESTAND,
     uitvoer=None, winrar_runner=None, sevenzip_runner=None,
-    progress_callback=None,
+    progress_callback=None, cleanup_originals=None, cleanup_remover=None,
 ):
     uitvoer = uitvoer or sys.stdout
     bronmap = Path(bronmap).resolve()
@@ -440,9 +501,36 @@ def voer_salvage_workflow_uit(
     sets = ontdek_archive_sets(bronmap, exclude=workspace)
     if rar_set:
         sets = tuple(s for s in sets if s.sleutel.casefold() == rar_set.casefold())
-    if not sets:
-        raise SalvageFout("Geen passende RAR-sets gevonden.")
     database = SQLiteDatabase(database_pad)
+    if cleanup_originals is None:
+        from core.settings import get_settings_manager
+        cleanup_originals = bool(
+            get_settings_manager().section("general").get(
+                "delete_original_rars_after_success", True
+            )
+        )
+    cleanup_logger = _CleanupLogger(uitvoer)
+    hervatte_cleanups = hervat_rar_cleanups(
+        database, logger=cleanup_logger, remover=cleanup_remover
+    )
+    if hervatte_cleanups:
+        uitvoer.write(
+            f"RAR-cleanup hervat: {len(hervatte_cleanups)} geregistreerde set(s).\n"
+        )
+        # Een hervatte cleanup kan de zojuist geïnventariseerde bronvolumes
+        # hebben verwijderd. Gebruik daarom nooit de verouderde setobjecten.
+        sets = ontdek_archive_sets(bronmap, exclude=workspace)
+        if rar_set:
+            sets = tuple(
+                item for item in sets
+                if item.sleutel.casefold() == rar_set.casefold()
+            )
+        if not sets:
+            database.sluit()
+            return ()
+    elif not sets:
+        database.sluit()
+        raise SalvageFout("Geen passende RAR-sets gevonden.")
     winrar_tool, zeven_tool = detecteer_winrar(), detecteer_7zip()
     samenvattingen = []
     try:
@@ -702,11 +790,56 @@ def voer_salvage_workflow_uit(
                 classificatie.duplicaten_verwijderd, grootte,
                 len(vergelijking.extras), recovery_items, eind, extracted,
             )
-            _bewaar_run(
+            salvage_run_id = _bewaar_run(
                 database, gestart, samenvatting, bronstatus, winrar,
                 extractie, vergelijking, recovery, gekozen,
                 winrar_tool, zeven_tool, recovery_set_id,
             )
+            controles = _cleanup_controles(
+                set_, samenvatting, vergelijking, winrar, extractie
+            )
+            eligible = all(controles.values())
+            reden = "; ".join(
+                f"{naam}={'PASS' if waarde else 'FAIL'}"
+                for naam, waarde in controles.items()
+            )
+            uitvoer.write(
+                f"RAR-cleanup controle set={set_.sleutel}: {reden}\n"
+                "RAR-cleanup geregistreerde volumes: "
+                f"{[str(volume) for volume in set_.volumes]}\n"
+            )
+            cleanup_id = registreer_rar_cleanup(
+                database, salvage_run_id, set_.sleutel, bronmap,
+                set_.volumes, cleanup_originals, eligible, reden,
+            )
+            cleanup = voer_rar_cleanup_uit(
+                database, cleanup_id, logger=cleanup_logger,
+                remover=cleanup_remover,
+            )
+            samenvatting = replace(
+                samenvatting, cleanup_status=cleanup.status,
+                cleanup_removed=len(cleanup.removed),
+            )
+            if cleanup.status == "removed":
+                uitvoer.write(
+                    "Recovery voltooid. "
+                    f"{len(cleanup.removed)} originele RAR-volumes verwijderd.\n"
+                )
+            elif cleanup.status == "cleanup_disabled":
+                uitvoer.write(
+                    "Recovery voltooid. Originele RAR-volumes behouden "
+                    "volgens instellingen.\n"
+                )
+            elif cleanup.status == "partial_cleanup":
+                uitvoer.write(
+                    "Recovery voltooid, maar niet alle originele RAR-volumes "
+                    "konden worden verwijderd.\n"
+                )
+            else:
+                uitvoer.write(
+                    "Recovery niet volledig voltooid. Originele RAR-volumes "
+                    "zijn behouden.\n"
+                )
             uitvoer.write(
                 f"{eind}: verwacht {len(verwacht)}, fysiek aanwezig "
                 f"{classificatie.fysiek_aanwezig}, volledig goed {goed}, "

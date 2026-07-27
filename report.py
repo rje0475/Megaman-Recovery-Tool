@@ -229,11 +229,16 @@ def maak_rapport(map_pad, database):
         f.write("------------------------------\n")
         salvage_runs = database.verbinding.execute(
             """
-            SELECT * FROM salvage_runs
-            WHERE id IN (
+            SELECT run.*, cleanup.status cleanup_status,
+                   cleanup.removed_volumes cleanup_removed_volumes,
+                   cleanup.failed_volumes cleanup_failed_volumes
+            FROM salvage_runs run
+            LEFT JOIN rar_cleanup_runs cleanup
+              ON cleanup.salvage_run_id=run.id
+            WHERE run.id IN (
               SELECT MAX(id) FROM salvage_runs GROUP BY rar_set_key
             )
-            ORDER BY rar_set_key
+            ORDER BY run.rar_set_key
             """
         )
         for run in salvage_runs:
@@ -253,7 +258,10 @@ def maak_rapport(map_pad, database):
                 f"SIZE_MISMATCH={run['size_mismatch_count']} "
                 f"EXTRA={run['extra_count']} | "
                 f"recovery={run['recovery_item_count']} | "
-                f"{run['final_status']}\n"
+                f"{run['final_status']} | "
+                f"RAR-cleanup={run['cleanup_status'] or 'niet geregistreerd'} | "
+                f"verwijderd={run['cleanup_removed_volumes'] or '[]'} | "
+                f"cleanupfouten={run['cleanup_failed_volumes'] or '{}'}\n"
             )
         f.write("\n")
 
